@@ -2576,16 +2576,14 @@ input { font-family: inherit; border: none; outline: none; background: none; }
   });
 
   // ---- Claude AI integration (via local proxy) ----
-  var PROXY_URL = 'http://localhost:3456';
+  var PROXY_URL = '/api/claude';
   var aiEnabled = false;
 
-  // Test if proxy is running
-  fetch(PROXY_URL, { method: 'OPTIONS' }).then(function() {
-    aiEnabled = true;
-    console.log('Claude AI proxy connected');
-  }).catch(function() {
-    console.log('No AI proxy — using simulated responses');
-  });
+  // Test if API is available
+  fetch(PROXY_URL, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:5,messages:[{role:'user',content:'hi'}]}) })
+    .then(function(r) { return r.json(); })
+    .then(function(d) { if (d.content) { aiEnabled = true; console.log('Claude AI connected'); } else { console.log('AI unavailable:', d.error); } })
+    .catch(function() { console.log('No AI — using simulated responses'); });
 
   function askClaude(userMessage, context) {
     if (!aiEnabled) return Promise.resolve(null);

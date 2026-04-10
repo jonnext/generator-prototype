@@ -1,0 +1,52 @@
+/* =============================================================================
+   DESIGN TOKENS — ported verbatim from gen/generate-prototype.html L11-L54
+   These are the single source of truth for the prototype. Tailwind v4 picks
+   them up via @theme in index.css so utilities (bg-paper, text-leather, etc.)
+   map directly to the same CSS variables.
+   ============================================================================= */
+:root {
+  /* Brand */
+  --leather: #1b1918;
+  --paper: #f8f5f1;
+  --warm-white: #fdfbf9;
+
+  /* Brand scale */
+  --brand-25: #f0e9e6;
+  --brand-50: #e5deda;
+  --brand-100: #cdc5c1;
+  --brand-200: #b7ada8;
+  --brand-300: #9e8f88;
+  --brand-400: #847770;
+  --brand-500: #6c615c;
+
+  /* Semantic */
+  --success: #11cca6;
+  --warning: #f86d17;
+  --error: #e5462d;
+
+  /* Fonts */
+  --font-heading: 'FK Grotesk Neue', 'Inter', system-ui, sans-serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+  --font-code: 'SF Mono', 'Fira Code', monospace;
+
+  /* Shadows */
+  --shadow-toolbar:
+    0px 12px 16px -4px rgba(27, 25, 24, 0.08),
+    0px 4px 6px -2px rgba(27, 25, 24, 0.03),
+    0px 2px 2px -1px rgba(27, 25, 24, 0.04);
+  --shadow-card:
+    0px 8px 24px -6px rgba(27, 25, 24, 0.06),
+    0px 2px 8px -2px rgba(27, 25, 24, 0.04);
+
+  /* Easing (Emil Kowalski) — kept for any non-Motion CSS transition exceptions */
+  --ease-out-quart: cubic-bezier(0.165, 0.84, 0.44, 1);
+  --ease-out-quint: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out-cubic: cubic-bezier(0.645, 0.045, 0.355, 1);
+
+  /* Layout */
+  --highway-width: min(720px, 100% - 32px);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-xl: 24px;
+}

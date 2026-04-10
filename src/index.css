@@ -1,0 +1,92 @@
+@import 'tailwindcss';
+
+/* Map the design tokens in tokens.css into Tailwind v4's theme so utilities
+   like bg-paper, text-leather, rounded-md-token, etc. resolve to the real
+   CSS variables. This keeps the tokens file as the single source of truth. */
+@theme {
+  --color-leather: var(--leather);
+  --color-paper: var(--paper);
+  --color-warm-white: var(--warm-white);
+
+  --color-brand-25: var(--brand-25);
+  --color-brand-50: var(--brand-50);
+  --color-brand-100: var(--brand-100);
+  --color-brand-200: var(--brand-200);
+  --color-brand-300: var(--brand-300);
+  --color-brand-400: var(--brand-400);
+  --color-brand-500: var(--brand-500);
+
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+
+  --font-heading: var(--font-heading);
+  --font-body: var(--font-body);
+  --font-code: var(--font-code);
+
+  --radius-sm-token: var(--radius-sm);
+  --radius-md-token: var(--radius-md);
+  --radius-lg-token: var(--radius-lg);
+  --radius-xl-token: var(--radius-xl);
+
+  --shadow-toolbar: var(--shadow-toolbar);
+  --shadow-card: var(--shadow-card);
+
+  --breakpoint-md: 768px;
+}
+
+/* Base */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--paper);
+  color: var(--leather);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Chat tray pulse — the one documented exception to the "springs not
+   keyframes" rule from the plan. A 2s sine-wave border glow that ticks
+   while the generating phase is active. Motion can do this with a
+   repeat animation, but the spring graph would be busy tracking a
+   value that never settles, which costs more than a GPU-compositing
+   CSS keyframe here. Reduced-motion disables the animation below. */
+@keyframes chat-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 0 rgba(139, 92, 246, 0),
+      var(--shadow-card);
+    border-color: var(--brand-50);
+  }
+  50% {
+    box-shadow:
+      0 0 0 6px rgba(139, 92, 246, 0.12),
+      var(--shadow-card);
+    border-color: var(--brand-200);
+  }
+}
+
+.chat-tray-pulse {
+  animation: chat-pulse 2s ease-in-out infinite;
+}
+
+/* Respect reduced-motion universally — Motion springs still honour this via
+   usePrefersReducedMotion(), but we also neutralise any stray CSS transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 150ms !important;
+    scroll-behavior: auto !important;
+  }
+  .chat-tray-pulse {
+    animation: none !important;
+  }
+}

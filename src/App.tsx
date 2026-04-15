@@ -23,30 +23,44 @@
 // Per rendering-conditional-render we use a ternary, never &&.
 
 import { AnimatePresence } from 'motion/react'
-import { useCallback, useRef } from 'react'
+import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
 import { DiscoveryScreen } from '@/screens/DiscoveryScreen'
 import { CanvasScreen } from '@/screens/CanvasScreen'
-import { ChatTray } from '@/components/ChatTray'
+import { Toolbar } from '@/components/Toolbar'
 import { useShapingEngine, selectIsGenerating } from '@/hooks/useShapingEngine'
 import { callClaude, streamClaude } from '@/lib/claude'
 import {
   buildActionPlanPrompt,
   parseActionPlanSkeleton,
+  timeMinutesToDurationId,
   type ActionPlanSkeleton,
 } from '@/lib/actionPlan'
+import { fetchResearch, formatResearchForPrompt, type ResearchMode } from '@/lib/research'
+
+// Research mode is read from ?mode=exa-only on first load and pinned for the
+// session. No reactivity to URL changes — switching modes requires a reload,
+// which is the cheapest A/B for the demo.
+function getResearchMode(): ResearchMode {
+  if (typeof window === 'undefined') return 'full'
+  const params = new URLSearchParams(window.location.search)
+  return params.get('mode') === 'exa-only' ? 'exa-only' : 'full'
+}
+const RESEARCH_MODE: ResearchMode = getResearchMode()
 import {
   buildStepBodyPrompt,
   buildInpaintingPrompt,
 } from '@/lib/inpainting'
-import type { SeedProject } from '@/lib/seedProjects'
+import { fetchChatAck } from '@/lib/chatAck'
 import type {
   ActionPlan,
   ChatMessage,
   InpaintingAction,
+  Phase,
   PersonalPills,
   Step,
   StepPillRow,
 } from '@/lib/state'
+import type { ModeId } from '@/lib/copy'
 
 // ----------------------------------------------------------------------------
 // Skeleton -> ActionPlan conversion
@@ -79,6 +93,68 @@ function skeletonToActionPlan(skeleton: ActionPlanSkeleton): ActionPlan {
 }
 
 // ----------------------------------------------------------------------------
+// mergeBodiesByStepId — Gap #2 body preservation.
+//
+// When a chat-driven refinement triggers runSkeleton again, the new skeleton
+// arrives with empty step bodies (Claude only writes bodies during the second
+// pass). If the student has already generated real content, replacing the
+// plan wholesale wipes everything they just read. This helper carries
+// forward bodies from old steps whose ids still exist in the new plan AND
+// had finished streaming (isComplete), so a refinement preserves the canvas
+// content while the student tees up the next Build.
+//
+// Rules:
+//   - Match by step.id. If the new skeleton restructured ids, the old bodies
+//     don't carry (correct — the shape changed).
+//   - Only merge when the OLD step was `isComplete` AND has a non-empty body.
+//     Partial in-flight streams are discarded — the chat context that caused
+//     the regeneration implies they were about to be replaced anyway.
+//   - Pills on the new plan keep the new plan's pills. Only `body` and
+//     `isComplete` flow from the old step.
+//
+// Kept at module level per rerender-no-inline-components / rendering-hoist-jsx
+// so the function identity is stable and it can be tested in isolation.
+// ----------------------------------------------------------------------------
+
+function mergeBodiesByStepId(
+  newPlan: ActionPlan,
+  oldPlan: ActionPlan,
+): ActionPlan {
+  return {
+    ...newPlan,
+    steps: newPlan.steps.map((newStep) => {
+      const oldStep = oldPlan.steps.find((s) => s.id === newStep.id)
+      if (oldStep && oldStep.isComplete && oldStep.body.length > 0) {
+        return { ...newStep, body: oldStep.body, isComplete: true }
+      }
+      return newStep
+    }),
+  }
+}
+
+// ----------------------------------------------------------------------------
+// difficultyToModeId — maps the skeleton's production-aligned difficulty
+// ("beginner" | "intermediate" | "advanced") onto the prototype's ModeId
+// enum ("beginner-guided" | "intermediate" | "advanced-minimal"). Returns
+// undefined when the difficulty is missing or unrecognized so callers can
+// skip updating the pill rather than forcing a default that would shadow
+// a genuine "default" origin.
+// ----------------------------------------------------------------------------
+
+function difficultyToModeId(difficulty: string | undefined): ModeId | undefined {
+  switch (difficulty) {
+    case 'beginner':
+      return 'beginner-guided'
+    case 'intermediate':
+      return 'intermediate'
+    case 'advanced':
+      return 'advanced-minimal'
+    default:
+      return undefined
+  }
+}
+
+// ----------------------------------------------------------------------------
 // App
 // ----------------------------------------------------------------------------
 
@@ -88,11 +164,13 @@ export function App() {
     phase,
     intent,
     personal,
+    personalOrigins,
     actionPlan,
     expandedStepId,
     chat,
     setPhase,
     setPersonalPill,
+    applyAiPersonalPills,
     setActionPlan,
     expandStep,
     setStepPill,
@@ -124,23 +202,55 @@ export function App() {
   personalRef.current = personal
   const intentRef = useRef<string>(intent)
   intentRef.current = intent
+  // Chat messages follow the same mirror pattern so handleChatSend stays
+  // stable across chat ticks. Without this ref, chat.messages in the dep
+  // array would recreate the callback on every message, churning Toolbar
+  // props and defeating useCallback memoization.
+  const chatMessagesRef = useRef<ChatMessage[]>(chat.messages)
+
+  // Research status surfaced in the Toolbar's "Writing…" chip during the
+  // research fan-out phase. Null when no research is in flight. Cycles
+  // through per-tool labels while fetchResearch runs — the cadence is an
+  // illusion of progress since the backend returns all three tools at
+  // once, but it's honest enough for the demo. Real SSE per-tool
+  // streaming is a follow-up.
+  const [researchStatus, setResearchStatus] = useState<string | null>(null)
+  chatMessagesRef.current = chat.messages
+  // Phase ref follows the same mirror pattern so handleChatSend can read the
+  // live phase without being recreated on every phase flip. Using an effect
+  // (not inline assignment) keeps the closure-visible value consistent with
+  // React's commit semantics — the ref lands after the paint, which is when
+  // an async user send actually reads it. Gap #2 phase-aware gating relies
+  // on this being current at the moment the chat handler fires.
+  const phaseRef = useRef<Phase>(phase)
+  useEffect(() => {
+    phaseRef.current = phase
+  }, [phase])
 
   // --------------------------------------------------------------------------
-  // Parallel Claude driver — shared by handleGenerate and chat re-runs.
+  // Claude drivers — split into two phases per Thread 5.
   // --------------------------------------------------------------------------
   //
-  // Given the current intent + personal + (optional) chat context, this:
-  //   1. Calls Claude for the Action Plan skeleton (non-streaming).
-  //   2. Seeds the reducer with the skeleton so all 5 step cards render.
-  //   3. Fires Promise.all of N step body streams in parallel.
-  //   4. Each stream appends chunks to its own step as they arrive, so the
-  //      UI shows progressive text without waiting for other steps.
-  //   5. On the final step completing, phase advances to 'complete'.
+  // Thread 5 splits what used to be a single runGeneration sweep into two
+  // user-gated stages:
   //
-  // Aborted runs are detected via signal.aborted and exit silently (the
-  // handler that called abort owns the next-run scheduling).
+  //   runSkeleton(intent, context)   — Generate (in Toolbar, Team B)
+  //     phase: discovery -> materializing -> sculpting
+  //     Produces: title, description, 5 step headings, pill decisions.
+  //     Step bodies remain empty until the student taps Build.
+  //
+  //   runStepBodies(plan, intent)    — Build   (in ProjectHeader, Team C)
+  //     phase: sculpting -> build -> generating -> complete
+  //     Produces: streamed body paragraphs for every step in parallel.
+  //     The 'build' phase is the brief commit handshake before the first
+  //     chunk lands; as soon as any step stream begins we flip to
+  //     'generating' so the chat tray pulse engages.
+  //
+  // Both stages share the same AbortController via runAbortRef so a chat
+  // interrupt mid-sculpt or mid-build cancels the in-flight call and a
+  // fresh run starts on the next user action.
 
-  const runGeneration = useCallback(
+  const runSkeleton = useCallback(
     async (
       nextIntent: string,
       contextMessages: ChatMessage[],
@@ -155,12 +265,47 @@ export function App() {
 
       setPhase('materializing')
 
-      // ---- Step 1: Action Plan skeleton (non-streaming, full object) -------
+      // ---- Research fan-out (Exa + Perplexity + Firecrawl) -------------
+      // Feeds Claude grounded evidence before the skeleton prompt. A failure
+      // here is non-fatal — the skeleton call falls back to zero-research
+      // mode so the student still gets an outline (just the pre-research
+      // quality level).
+      let researchContext = ''
+      const labels =
+        RESEARCH_MODE === 'exa-only'
+          ? ['Checking Exa']
+          : ['Checking Exa', 'Synthesising with Perplexity', 'Extracting with Firecrawl']
+      let labelIdx = 0
+      setResearchStatus(labels[0])
+      const statusTimer = setInterval(() => {
+        labelIdx = (labelIdx + 1) % labels.length
+        setResearchStatus(labels[labelIdx])
+      }, 1500)
+
+      try {
+        const research = await fetchResearch(nextIntent, {
+          mode: RESEARCH_MODE,
+          signal,
+        })
+        researchContext = formatResearchForPrompt(research)
+      } catch (err) {
+        if (!signal.aborted) {
+          console.warn('Research fan-out failed — continuing without context', err)
+        }
+      } finally {
+        clearInterval(statusTimer)
+        setResearchStatus(null)
+      }
+
+      if (signal.aborted) return
+
+      // ---- Action Plan skeleton (non-streaming, full object) -------------
       let skeleton: ActionPlanSkeleton
       try {
         const { system, user } = buildActionPlanPrompt({
           intent: nextIntent,
           personal: personalRef.current,
+          researchContext,
         })
         const messages = [
           { role: 'user' as const, content: user },
@@ -180,17 +325,89 @@ export function App() {
       } catch (err) {
         if (signal.aborted) return
         console.error('Action plan call failed', err)
-        // Leave the canvas in materializing state so the skeleton cards
-        // stay visible rather than wiping back to discovery. A future
-        // error-surface iteration can promote this to a toast.
+        // Reset phase back to discovery so the student isn't stuck staring
+        // at the "Writing…" state forever when the proxy is down or Claude
+        // rejects the request. The surface a user sees is: click Generate,
+        // skeleton stems flash, immediately return to the Discovery entry
+        // point. A future iteration can promote this to a toast with the
+        // error message. Wrapped in startTransition per rerender-transitions.
+        startTransition(() => {
+          setPhase('discovery')
+        })
+        runAbortRef.current = null
         return
       }
 
-      const plan = skeletonToActionPlan(skeleton)
-      setActionPlan(plan)
-      setPhase('sculpting')
+      let plan = skeletonToActionPlan(skeleton)
 
-      // ---- Step 2: parallel step body streams -----------------------------
+      // Gap #2 body preservation — when the student refined via chat, the new
+      // skeleton replaces the old plan but the existing generated content
+      // should stay visible through the regeneration. Only steps that were
+      // already complete (isComplete + body.length > 0) carry forward, and
+      // only when their id still exists in the new plan. Pills on the new
+      // plan are never overridden — only body + isComplete flow from the
+      // old step.
+      const previousPlan = actionPlanRef.current
+      if (previousPlan) {
+        plan = mergeBodiesByStepId(plan, previousPlan)
+      }
+
+      setActionPlan(plan)
+
+      // Gap #1 AI pill application — Claude already proposes difficulty +
+      // timeMinutes on the skeleton root but the previous build discarded
+      // them. Consume them here so MetadataRow can render the "AI picked"
+      // treatment with the badge. Missing / unrecognised values fall back
+      // to undefined and the pill keeps its current origin (likely 'default'
+      // on first generate, or whatever the student already confirmed).
+      const aiPatch: Partial<PersonalPills> = {}
+      const mappedMode = difficultyToModeId(skeleton.difficulty)
+      if (mappedMode !== undefined) {
+        aiPatch.mode = mappedMode
+      }
+      if (skeleton.timeMinutes !== undefined) {
+        aiPatch.duration = timeMinutesToDurationId(skeleton.timeMinutes)
+      }
+      if (Object.keys(aiPatch).length > 0) {
+        applyAiPersonalPills(aiPatch)
+      }
+
+      // Stop at sculpting — the student must tap Build to commit and
+      // trigger runStepBodies. rerender-transitions: wrap the phase flip
+      // in startTransition so the skeleton -> sculpting morph doesn't
+      // block input.
+      startTransition(() => {
+        setPhase('sculpting')
+      })
+      runAbortRef.current = null
+    },
+    [applyAiPersonalPills, setActionPlan, setPhase],
+  )
+
+  const runStepBodies = useCallback(
+    async (plan: ActionPlan, nextIntent: string): Promise<void> => {
+      // Replace any previous in-flight run — a Build tap while a skeleton
+      // or earlier Build is still streaming starts fresh.
+      if (runAbortRef.current) {
+        runAbortRef.current.abort()
+      }
+      const controller = new AbortController()
+      runAbortRef.current = controller
+      const { signal } = controller
+
+      // Brief 'build' handshake before the first chunk lands. Visual
+      // purpose: the BuildButton reads 'Building…' while step cards
+      // prepare to receive their first byte. As soon as any stream
+      // begins writing we advance to 'generating' so the chat tray pulse
+      // engages.
+      //
+      // Both phase flips wrapped in startTransition (rerender-transitions):
+      // handleBuild wraps the outer dispatch but the `await` boundaries in
+      // this async function escape the outer transition, so each setPhase
+      // after a microtask tick needs its own startTransition call.
+      startTransition(() => setPhase('build'))
+
+      // ---- Parallel step body streams ------------------------------------
       //
       // async-parallel: fire all N streams with Promise.all instead of
       // awaiting each in sequence. Each stream:
@@ -198,10 +415,7 @@ export function App() {
       //   - Reads chunks via streamClaude's async generator.
       //   - Writes chunks into the reducer as they arrive.
       //   - Marks the step complete on clean end.
-      //
-      // We flip to 'generating' immediately before awaiting so the chat
-      // tray pulse engages while all 5 streams are racing.
-      setPhase('generating')
+      startTransition(() => setPhase('generating'))
 
       await Promise.all(
         plan.steps.map(async (step) => {
@@ -232,15 +446,10 @@ export function App() {
       )
 
       if (signal.aborted) return
-      setPhase('complete')
+      startTransition(() => setPhase('complete'))
       runAbortRef.current = null
     },
-    [
-      appendStepBodyChunk,
-      setActionPlan,
-      setPhase,
-      stepBodyComplete,
-    ],
+    [appendStepBodyChunk, setPhase, stepBodyComplete],
   )
 
   // --------------------------------------------------------------------------
@@ -251,30 +460,54 @@ export function App() {
     (value: string) => {
       // startMaterializing seeds intent + clears prior plan synchronously
       // so the canvas reveal animation can kick in before Claude responds.
+      // runSkeleton stops at sculpting — the student must tap Build to
+      // commit and stream step bodies.
       startMaterializing(value)
-      void runGeneration(value, [])
+      void runSkeleton(value, [])
     },
-    [runGeneration, startMaterializing],
+    [runSkeleton, startMaterializing],
   )
 
-  const handlePickCommunity = useCallback(
-    (project: SeedProject) => {
-      // Community tiles seed the intent from the tile's title. Future work
-      // can prefill pill decisions from the tile's metadata.
-      startMaterializing(project.title)
-      void runGeneration(project.title, [])
-    },
-    [runGeneration, startMaterializing],
-  )
+  // Build click handler — wired to ProjectHeader's BuildButton via
+  // CanvasScreen. Reads the live plan from the ref mirror so it can't
+  // capture a stale snapshot, then kicks off runStepBodies. The phase
+  // transition to 'build' happens inside runStepBodies itself. Wrapping
+  // the outer dispatch in startTransition keeps the button's tap feedback
+  // snappy even if React is mid-reconciliation.
+  const handleBuild = useCallback(() => {
+    const currentPlan = actionPlanRef.current
+    if (!currentPlan) return
+    startTransition(() => {
+      void runStepBodies(currentPlan, intentRef.current)
+    })
+  }, [runStepBodies])
 
-  // Chat send — honours the plan's interruptibility rule. The tray NEVER
-  // gates input on a generating flag. When the student sends while a
-  // stream is in flight we:
-  //   1. Abort the current run (runGeneration does this on its next call).
-  //   2. Append the user's message to the chat transcript.
-  //   3. Re-run generation with the updated chat transcript as context.
+  // Chat send — Gap #2 rewrites this to be ADDITIVE rather than destructive.
+  // Previously a chat message during build/generating aborted the in-flight
+  // body stream and replaced the skeleton, wiping all generated content.
+  // The new contract:
+  //
+  //   - The chat ack always fires (so the student always gets a response in
+  //     the tray). The ack prompt is phase-aware: during build/generating
+  //     it acknowledges the deferral; during sculpting/complete it
+  //     acknowledges the pill/structure change.
+  //
+  //   - runSkeleton is GATED by phase:
+  //       • 'build' or 'generating' → do NOT regenerate. The current stream
+  //         keeps running to completion. The chat context is in
+  //         chat.messages so the NEXT runSkeleton (from the next Build tap,
+  //         or a sculpting/complete-phase chat) will pick it up.
+  //       • 'sculpting' or 'complete' → regenerate normally. Body
+  //         preservation (mergeBodiesByStepId in runSkeleton) keeps existing
+  //         content visible while the new skeleton lands, so refinement
+  //         feels additive.
+  //
+  // Gating predicate is a simple union of phases so adding an orthogonal
+  // clause later (e.g. screen === 'discovery' once ChatTray hoists to
+  // persistent chrome) stays a one-liner.
   const handleChatSend = useCallback(
     (text: string, isInterrupt: boolean) => {
+      void isInterrupt // reserved — runSkeleton handles its own abort below
       const userMessage: ChatMessage = {
         id: `msg-${Date.now()}-user`,
         role: 'user',
@@ -282,28 +515,62 @@ export function App() {
       }
       addChatMessage(userMessage)
 
-      // Build the message list we want to forward to Claude. Read the
-      // current chat messages from the ref-mirrored store by deriving from
-      // the engine's chat.messages snapshot at call time — we rely on the
-      // addChatMessage above to have updated the reducer by the time
-      // runGeneration reads it. Since addChatMessage dispatches synchronously
-      // the new message is in chat.messages before the next microtask, but
-      // to be safe we append it manually to the forwarded list.
-      const forwarded = [...chat.messages, userMessage]
+      // Build the message list we want to forward to Claude. addChatMessage
+      // dispatches synchronously, but the ref still holds the pre-dispatch
+      // snapshot — append the new message manually to keep the forwarded
+      // transcript current.
+      const forwarded = [...chatMessagesRef.current, userMessage]
 
-      // Only re-run generation if we already have an intent (the student is
-      // on the canvas, not the discovery screen). If intent is empty we
-      // still just append the message and let the next Generate fire the
-      // real call.
-      if (intentRef.current.length > 0) {
-        void runGeneration(intentRef.current, forwarded)
-      } else if (isInterrupt) {
-        // Nothing to abort — interrupt is a no-op off-canvas.
-        runAbortRef.current?.abort()
-        runAbortRef.current = null
+      // Only run the chat flow when we have an intent (student is on the
+      // canvas). If intent is empty we just append the user bubble and let
+      // the next Generate fire the real call.
+      if (intentRef.current.length === 0) {
+        return
       }
+
+      const currentPhase = phaseRef.current
+
+      // Ack always fires — feedback in the tray regardless of whether the
+      // canvas regenerates. Prompt copy adjusts based on phase so a deferred
+      // refinement reads as a promise, not a lie. Runs independently of
+      // runSkeleton; a failed ack is non-fatal.
+      void (async () => {
+        try {
+          const ack = await fetchChatAck(
+            {
+              userMessage: text,
+              currentIntent: intentRef.current,
+              currentTitle: actionPlanRef.current?.title ?? '',
+              currentPhase,
+              previousMessages: forwarded,
+            },
+            runAbortRef.current?.signal,
+          )
+          if (ack.length === 0) return
+          addChatMessage({
+            id: `msg-${Date.now()}-assistant`,
+            role: 'assistant',
+            content: ack,
+          })
+        } catch (err) {
+          if (err instanceof Error && err.name !== 'AbortError') {
+            console.error('Chat ack failed', err)
+          }
+        }
+      })()
+
+      // Phase gate — defer regeneration during mid-stream phases. The ack
+      // copy is responsible for explaining this to the student.
+      if (currentPhase === 'build' || currentPhase === 'generating') {
+        return
+      }
+
+      // Safe to regenerate. In 'sculpting' there are no bodies to lose; in
+      // 'complete' body preservation keeps existing content visible through
+      // the skeleton swap.
+      void runSkeleton(intentRef.current, forwarded)
     },
-    [addChatMessage, chat.messages, runGeneration],
+    [addChatMessage, runSkeleton],
   )
 
   // Inpainting — one step at a time, full plan passed as context. Starts
@@ -376,23 +643,30 @@ export function App() {
   // transitions across the Discovery -> Canvas morph. mode="wait" would
   // unmount the exiting screen fully before mounting the new one, which
   // breaks Motion's layout continuity tracking. popLayout lets both
-  // coexist briefly so the SearchInput layoutId can interpolate into the
-  // ChatTray layoutId.
+  // coexist briefly so the Toolbar's layoutIds can interpolate across
+  // the phase swap.
   //
-  // ChatTray is mounted OUTSIDE the AnimatePresence block so it survives
-  // every phase transition. That preserves its draft text, scroll position,
-  // and — critically for I8 — the Claude stream AbortController ref. The
-  // tray fades out via its isVisible prop during the discovery phase while
-  // staying mounted, so its layoutId-anchored wrapper is always available
-  // as a target for the SearchInput -> ChatTray shared-element morph.
+  // Toolbar is mounted OUTSIDE the AnimatePresence block so it survives
+  // every phase transition. That preserves its draft text, local
+  // expansion state, and — critically for I8 — the Claude stream
+  // AbortController ref lives one level up in this component. The
+  // Toolbar is the persistent bottom-docked pill / input / chat sheet,
+  // contextually morphing based on `phase`:
+  //   - Discovery phase -> "What do you want to build?" pill, taps open
+  //     a text input (ToolbarInput) that calls onGenerate.
+  //   - Everything else -> intent-reflecting pill that opens ChatTray
+  //     (now repurposed as the Canvas expanded drawer) on tap.
+  //
+  // ChatTray itself is rendered INSIDE Toolbar (Canvas mode) — it's no
+  // longer a sibling of the screens. Its props are forwarded through
+  // Toolbar so App remains the single source of Claude wiring.
   return (
     <>
       <AnimatePresence mode="popLayout">
         {phase === 'discovery' ? (
           <DiscoveryScreen
             key="discovery"
-            onGenerate={handleGenerate}
-            onPickCommunity={handlePickCommunity}
+            onSearchCardSubmit={handleGenerate}
           />
         ) : (
           <CanvasScreen
@@ -400,6 +674,7 @@ export function App() {
             intent={intent}
             phase={phase}
             personal={personal}
+            personalOrigins={personalOrigins}
             actionPlan={actionPlan}
             expandedStepId={expandedStepId}
             setPhase={setPhase}
@@ -407,18 +682,22 @@ export function App() {
             expandStep={expandStep}
             setStepPill={setStepPill}
             startInpainting={handleStartInpainting}
+            onBuild={handleBuild}
             onBack={reset}
           />
         )}
       </AnimatePresence>
-      <ChatTray
-        messages={chat.messages}
-        isOpen={chat.isOpen}
+      <Toolbar
+        phase={phase}
+        intent={intent}
         isGenerating={selectIsGenerating(phase)}
-        isVisible={phase !== 'discovery'}
-        onOpen={openChat}
-        onClose={closeChat}
-        onSend={handleChatSend}
+        researchStatus={researchStatus}
+        onGenerate={handleGenerate}
+        chatMessages={chat.messages}
+        isChatOpen={chat.isOpen}
+        onOpenChat={openChat}
+        onCloseChat={closeChat}
+        onChatSend={handleChatSend}
       />
     </>
   )

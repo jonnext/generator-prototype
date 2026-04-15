@@ -20,6 +20,12 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: () => '/',
       },
+      // /api/research path is preserved so dev-proxy can route it.
+      // In production this is served by api/research.js as a Vercel serverless function.
+      '/api/research': {
+        target: 'http://localhost:3456',
+        changeOrigin: true,
+      },
     },
   },
 })

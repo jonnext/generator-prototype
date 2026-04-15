@@ -16,7 +16,9 @@ import { layoutShift } from '@/motion/springs'
 import type {
   BudgetId,
   DurationId,
+  PersonalPillOrigins,
   PersonalPills,
+  PillOrigin,
 } from '@/lib/state'
 import { modes, type ModeId } from '@/lib/copy'
 
@@ -53,10 +55,11 @@ const modeOptions: PillOption<ModeId>[] = modes.map((mode) => ({
 
 export interface MetadataRowProps {
   personal: PersonalPills
+  origins: PersonalPillOrigins
   onChange: <K extends keyof PersonalPills>(key: K, value: PersonalPills[K]) => void
 }
 
-function MetadataRowImpl({ personal, onChange }: MetadataRowProps) {
+function MetadataRowImpl({ personal, origins, onChange }: MetadataRowProps) {
   const handleDuration = useCallback(
     (next: DurationId) => onChange('duration', next),
     [onChange],
@@ -80,18 +83,21 @@ function MetadataRowImpl({ personal, onChange }: MetadataRowProps) {
         name="Duration"
         options={durationOptions}
         value={personal.duration}
+        origin={origins.duration}
         onSelect={handleDuration}
       />
       <MetaPill<ModeId>
         name="Mode"
         options={modeOptions}
         value={personal.mode}
+        origin={origins.mode}
         onSelect={handleMode}
       />
       <MetaPill<BudgetId>
         name="Budget"
         options={budgetOptions}
         value={personal.budget}
+        origin={origins.budget}
         onSelect={handleBudget}
       />
     </div>
@@ -112,13 +118,36 @@ interface MetaPillProps<T extends string> {
   name: string
   options: PillOption<T>[]
   value: T
+  origin: PillOrigin
   onSelect: (next: T) => void
+}
+
+// Per-origin class maps. Module-level constants so the MetaPill render body
+// stays declarative and the three visual states read as a ternary lookup
+// rather than nested conditionals. Follows rendering-conditional-render.
+const PILL_SHELL_CLASSES: Record<PillOrigin, string> = {
+  default:
+    'font-body inline-flex items-center gap-1.5 rounded-full border border-dashed border-brand-200 bg-warm-white/60 px-3 py-1.5 text-xs text-brand-400 italic hover:border-brand-300 hover:text-leather focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200',
+  'ai-picked':
+    'font-body inline-flex items-center gap-1.5 rounded-full border border-brand-200 bg-warm-white px-3 py-1.5 text-xs text-leather hover:border-brand-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200',
+  'user-confirmed':
+    'font-body inline-flex items-center gap-1.5 rounded-full border border-brand-50 bg-warm-white px-3 py-1.5 text-xs text-leather hover:border-brand-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200',
+}
+
+// aria-label suffix keeps origin provenance available to assistive tech so
+// students using screen readers hear "Duration: 30 min (Claude proposed)"
+// instead of a generic value read.
+const PILL_ARIA_SUFFIX: Record<PillOrigin, string> = {
+  default: '(default, tap to pick)',
+  'ai-picked': '(Claude proposed, tap to change)',
+  'user-confirmed': '(you picked, tap to cycle)',
 }
 
 function MetaPillImpl<T extends string>({
   name,
   options,
   value,
+  origin,
   onSelect,
 }: MetaPillProps<T>) {
   const currentIndex = options.findIndex((opt) => opt.id === value)
@@ -129,6 +158,10 @@ function MetaPillImpl<T extends string>({
     onSelect(options[nextIndex].id)
   }, [currentIndex, options, onSelect])
 
+  // Three render branches for the three origins. Name color is slightly muted
+  // on 'default' to reinforce the hint treatment; 'ai-picked' shows a small
+  // "AI" badge between name and value; 'user-confirmed' is the existing
+  // solid chip with no badge.
   return (
     <motion.button
       type="button"
@@ -138,11 +171,33 @@ function MetaPillImpl<T extends string>({
       variants={metadataPillVariants}
       initial="initial"
       animate="settled"
-      className="font-body inline-flex items-center gap-1.5 rounded-full border border-brand-50 bg-warm-white px-3 py-1.5 text-xs text-leather hover:border-brand-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200"
-      aria-label={`${name}: ${current.label}. Tap to cycle.`}
+      className={PILL_SHELL_CLASSES[origin]}
+      aria-label={`${name}: ${current.label}. ${PILL_ARIA_SUFFIX[origin]}`}
     >
-      <span className="text-brand-400">{name}</span>
-      <span className="font-heading text-leather">{current.label}</span>
+      <span
+        className={
+          origin === 'default' ? 'text-brand-400' : 'text-brand-400'
+        }
+      >
+        {name}
+      </span>
+      {origin === 'ai-picked' ? (
+        <span
+          aria-hidden
+          className="font-body inline-flex items-center rounded-full bg-brand-25 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.08em] text-brand-500"
+        >
+          AI
+        </span>
+      ) : null}
+      <span
+        className={
+          origin === 'default'
+            ? 'font-heading text-brand-400'
+            : 'font-heading text-leather'
+        }
+      >
+        {current.label}
+      </span>
     </motion.button>
   )
 }

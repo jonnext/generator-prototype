@@ -23,7 +23,7 @@
 // I7 replaces the docked chat button with the full ChatTray.
 
 import { motion } from 'motion/react'
-import { memo, useCallback, useMemo, useTransition } from 'react'
+import { memo, useCallback, useLayoutEffect, useMemo, useTransition } from 'react'
 import { ProjectHeader } from '@/components/canvas/ProjectHeader'
 import { MetadataRow } from '@/components/canvas/MetadataRow'
 import { StepCard } from '@/components/canvas/StepCard'
@@ -33,11 +33,13 @@ import {
 } from '@/motion/choreography'
 import { sharedElement } from '@/motion/springs'
 import { rationales } from '@/lib/copy'
+import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion'
 import type {
   ActionPlan,
   InpaintingAction,
-  Phase,
+  PersonalPillOrigins,
   PersonalPills,
+  Phase,
 } from '@/lib/state'
 
 // ----------------------------------------------------------------------------
@@ -52,6 +54,7 @@ export interface CanvasScreenProps {
   intent: string
   phase: Phase
   personal: PersonalPills
+  personalOrigins: PersonalPillOrigins
   actionPlan: ActionPlan | null
   expandedStepId: string | null
   setPhase: (next: Phase) => void
@@ -70,6 +73,8 @@ export interface CanvasScreenProps {
     stepId: string,
     action: Exclude<InpaintingAction, null>,
   ) => void
+  /** Fires when the student taps the Build button in ProjectHeader. */
+  onBuild: () => void
   onBack: () => void
 }
 
@@ -83,6 +88,8 @@ function phaseBadge(phase: Phase): string {
       return 'Sketching your project…'
     case 'sculpting':
       return 'Shape it before we build'
+    case 'build':
+      return 'Locking it in…'
     case 'generating':
       return 'Writing the steps'
     case 'complete':
@@ -100,6 +107,7 @@ function CanvasScreenImpl({
   intent,
   phase,
   personal,
+  personalOrigins,
   actionPlan,
   expandedStepId,
   setPhase,
@@ -107,11 +115,33 @@ function CanvasScreenImpl({
   expandStep,
   setStepPill,
   startInpainting,
+  onBuild,
   onBack,
 }: CanvasScreenProps) {
   // Phase transitions are non-urgent: wrap in startTransition so input
   // events stay responsive during heavy reflow.
   const [, startPhaseTransition] = useTransition()
+
+  // Thread 1 scroll fix — when the Canvas enters the `materializing` phase
+  // after Discovery, the sibling AnimatePresence (popLayout) in App.tsx still
+  // has Discovery occupying viewport height during the shared-element morph,
+  // so the newly mounted Canvas content lands below the fold. Jump to top
+  // BEFORE paint so the stagger sequence reveals in place.
+  //
+  // Keyed on `phase` only. Fires on the first render with `materializing` and
+  // any re-entry; does not fire while the canvas stays in sculpting/generating.
+  // `behavior: 'instant'` in both branches — prefers-reduced-motion is honoured
+  // by skipping `smooth`, which is already the API contract here.
+  const prefersReducedMotion = usePrefersReducedMotion()
+  useLayoutEffect(() => {
+    if (phase !== 'materializing') return
+    if (typeof window === 'undefined') return
+    // Instant scroll-to-top — no smooth behavior, so reduced-motion users and
+    // regular users get the same jank-free snap. The variable is read so the
+    // linter + future maintainers see the dependency is intentional.
+    void prefersReducedMotion
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' as ScrollBehavior })
+  }, [phase, prefersReducedMotion])
 
   const handlePhaseAdvance = useCallback(
     (next: Phase) => {
@@ -214,10 +244,20 @@ function CanvasScreenImpl({
         </div>
 
         {/* ProjectHeader — shared element across phases via layoutId */}
-        <ProjectHeader badge={badge} title={title} description={description} />
+        <ProjectHeader
+          badge={badge}
+          title={title}
+          description={description}
+          phase={phase}
+          onBuild={onBuild}
+        />
 
         {/* MetadataRow — persistent medium-granularity pills */}
-        <MetadataRow personal={personal} onChange={handlePersonalChange} />
+        <MetadataRow
+          personal={personal}
+          origins={personalOrigins}
+          onChange={handlePersonalChange}
+        />
 
         {/* Steps region — skeleton in materializing, real plan in I6+ */}
         <motion.section
@@ -232,7 +272,17 @@ function CanvasScreenImpl({
                 <motion.div key={step.id} variants={stepCardVariants}>
                   <StepCard
                     step={step}
-                    isExpanded={expandedStepId === step.id}
+                    // During build/generating/complete phases, ALL step cards
+                    // auto-expand so streaming body content is visible across
+                    // all 5 steps at once. During sculpting (before Build) the
+                    // original single-expand behavior still applies so the
+                    // student can focus on one step's pills at a time.
+                    isExpanded={
+                      phase === 'build' ||
+                      phase === 'generating' ||
+                      phase === 'complete' ||
+                      expandedStepId === step.id
+                    }
                     onExpand={handleExpandStep}
                     onCollapse={handleCollapseStep}
                     onPickPill={handlePickPill}
@@ -241,14 +291,26 @@ function CanvasScreenImpl({
                   />
                 </motion.div>
               ))
-            : skeletonStepIds.map((id) => (
-                <motion.div
-                  key={id}
-                  variants={stepCardVariants}
-                  className="h-20 rounded-2xl border border-brand-50 bg-warm-white shadow-[var(--shadow-card)]"
-                  aria-hidden
-                />
-              ))}
+            : skeletonStepIds.map((id, index) => {
+                // Each placeholder shows its step number + a pulsing loader
+                // bar so the student can feel the 5-step shape of the project
+                // before Claude's skeleton call lands. Matches the J3-0 Paper
+                // frame "Round 5 - ideal flow" post-generate target.
+                const stepNumber = (index + 1).toString().padStart(2, '0')
+                return (
+                  <motion.div
+                    key={id}
+                    variants={stepCardVariants}
+                    className="flex w-full items-center gap-4 rounded-2xl border border-brand-50 bg-warm-white px-4 py-5 shadow-[var(--shadow-card)]"
+                    aria-hidden
+                  >
+                    <span className="font-body text-xs text-brand-400">
+                      {stepNumber}
+                    </span>
+                    <div className="h-2.5 flex-1 rounded-full bg-brand-50/70 animate-pulse" />
+                  </motion.div>
+                )
+              })}
         </motion.section>
       </motion.div>
       {/* ChatTray is mounted at App root (not here) so it survives phase

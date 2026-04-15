@@ -21,11 +21,14 @@
 import { useCallback, useReducer, useRef, useState } from 'react'
 import {
   DEFAULT_PERSONAL,
+  DEFAULT_PERSONAL_ORIGINS,
   type ActionPlan,
   type ChatMessage,
   type InpaintingAction,
+  type PersonalPillOrigins,
   type PersonalPills,
   type Phase,
+  type PillOrigin,
   type Step,
   type StepPillRow,
 } from '@/lib/state'
@@ -57,50 +60,119 @@ export function usePhase(): PhaseSlice {
 // commands like "I'm a beginner". A mini reducer keeps individual setters
 // stable and lets the chat tray patch multiple keys in one dispatch.
 
+// The personal slice now carries two parallel shapes: the pill VALUES
+// (PersonalPills) and their ORIGINS (PersonalPillOrigins). Origins are updated
+// in lockstep with values so a render never sees a stale origin relative to
+// a value. Keeping them in the same reducer (rather than two useReducers)
+// guarantees atomic updates for the MetadataRow consumer.
+
+interface PersonalState {
+  personal: PersonalPills
+  origins: PersonalPillOrigins
+}
+
+const INITIAL_PERSONAL: PersonalState = {
+  personal: DEFAULT_PERSONAL,
+  origins: DEFAULT_PERSONAL_ORIGINS,
+}
+
 type PersonalAction =
-  | { type: 'SET'; key: keyof PersonalPills; value: string }
-  | { type: 'PATCH'; patch: Partial<PersonalPills> }
+  | {
+      type: 'SET'
+      key: keyof PersonalPills
+      value: string
+      origin: PillOrigin
+    }
+  | {
+      type: 'PATCH'
+      patch: Partial<PersonalPills>
+      origin: PillOrigin
+    }
   | { type: 'RESET' }
 
 function personalReducer(
-  state: PersonalPills,
+  state: PersonalState,
   action: PersonalAction,
-): PersonalPills {
+): PersonalState {
   switch (action.type) {
     case 'SET':
-      return { ...state, [action.key]: action.value }
-    case 'PATCH':
-      return { ...state, ...action.patch }
+      return {
+        personal: { ...state.personal, [action.key]: action.value },
+        origins: { ...state.origins, [action.key]: action.origin },
+      }
+    case 'PATCH': {
+      const nextOrigins: PersonalPillOrigins = { ...state.origins }
+      for (const key of Object.keys(action.patch) as Array<keyof PersonalPills>) {
+        nextOrigins[key] = action.origin
+      }
+      return {
+        personal: { ...state.personal, ...action.patch },
+        origins: nextOrigins,
+      }
+    }
     case 'RESET':
-      return DEFAULT_PERSONAL
+      return INITIAL_PERSONAL
   }
 }
 
 export interface PersonalPillsSlice {
   personal: PersonalPills
+  personalOrigins: PersonalPillOrigins
+  /**
+   * Student tap from MetadataRow. The only caller today is the user-driven
+   * cycle click, so origin is always 'user-confirmed'. If a future caller
+   * needs a different origin it should use `applyAiPersonalPills` instead.
+   */
   setPersonalPill: <K extends keyof PersonalPills>(
     key: K,
     value: PersonalPills[K],
   ) => void
   patchPersonal: (patch: Partial<PersonalPills>) => void
+  /**
+   * Applied when a skeleton lands with Claude's proposed difficulty /
+   * timeMinutes / etc. Sets the values AND marks their origin as
+   * 'ai-picked' so MetadataRow can render the AI badge treatment.
+   */
+  applyAiPersonalPills: (patch: Partial<PersonalPills>) => void
   resetPersonal: () => void
 }
 
 export function usePersonalPills(): PersonalPillsSlice {
-  const [personal, dispatch] = useReducer(personalReducer, DEFAULT_PERSONAL)
+  const [{ personal, origins }, dispatch] = useReducer(
+    personalReducer,
+    INITIAL_PERSONAL,
+  )
 
   const setPersonalPill = useCallback(
     <K extends keyof PersonalPills>(key: K, value: PersonalPills[K]) =>
-      dispatch({ type: 'SET', key, value: value as string }),
+      dispatch({
+        type: 'SET',
+        key,
+        value: value as string,
+        origin: 'user-confirmed',
+      }),
     [],
   )
   const patchPersonal = useCallback(
-    (patch: Partial<PersonalPills>) => dispatch({ type: 'PATCH', patch }),
+    (patch: Partial<PersonalPills>) =>
+      dispatch({ type: 'PATCH', patch, origin: 'user-confirmed' }),
+    [],
+  )
+  const applyAiPersonalPills = useCallback(
+    (patch: Partial<PersonalPills>) =>
+      dispatch({ type: 'PATCH', patch, origin: 'ai-picked' }),
     [],
   )
   const resetPersonal = useCallback(() => dispatch({ type: 'RESET' }), [])
 
-  return { personal, setPersonalPill, patchPersonal, resetPersonal }
+  return {
+    personal,
+    personalOrigins: origins,
+    setPersonalPill,
+    patchPersonal,
+    applyAiPersonalPills,
+    resetPersonal,
+  }
 }
 
 // =============================================================================

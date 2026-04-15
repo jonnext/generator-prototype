@@ -2,13 +2,20 @@
 //
 // Collapsed state: heading + compact pill summary + inpainting handle (on
 // hover/focus/expanded). Tap the card to expand and reveal:
-//   - full body paragraph (streams in during generating phase)
+//   - full body (one or more paragraphs, streams in during generating phase)
 //   - full-width StepPill rows (one per decision)
 //   - ResearchCard (lazy) per pill row for option comparisons
 //
 // Composition follows the Shape of AI "Shared Vision + Controls" pattern:
 // the card is the shared vision, the pills + inpainting handle are the
 // controls the student uses to shape it.
+//
+// Production alignment (Thread 4): visual structure mirrors the 720px
+// centered column at projects-app/app/src/pages/create/pages/project/page.tsx:117.
+// Width constraint is inherited from CanvasScreen's wrapper (max-w-[720px]).
+// Title weight is font-heading text-base md:text-lg to match production step
+// headings; body prose is font-body text-sm leading-relaxed. We deliberately
+// do NOT import LazyReactEditor — bodies are flat prose, split on blank lines.
 //
 // Per rerender-no-inline-components every sub-piece is a module-level
 // component or an imported component. Per rerender-use-ref-transient-values
@@ -22,6 +29,7 @@ import { researchComparisons } from '@/lib/copy'
 import { StepPill } from './StepPill'
 import { ResearchCard } from './ResearchCard'
 import { InpaintingHandle } from './InpaintingHandle'
+import { StepBody } from './StepBody'
 import {
   inpaintingDissolve,
   inpaintingResolve,
@@ -114,6 +122,12 @@ function StepCardImpl({
     return map
   }, [step.pills])
 
+  // T14 — body is now a full markdown document (Basket / Objective /
+  // Key Actions / Launchpad) rendered by <StepBody/>. No pre-split needed;
+  // react-markdown walks the stream-in-progress string each chunk and the
+  // module-level component overrides in StepBody.tsx keep identity stable
+  // across every chunk (rerender-no-inline-components).
+
   const isInpainting = step.inpainting !== null
 
   return (
@@ -157,8 +171,14 @@ function StepCardImpl({
             transition={stepExpand}
             className="flex flex-col gap-4 overflow-hidden"
           >
-            {/* Body paragraph — streams in during generating phase. The
-                inpainting overlay dissolves the body when an action runs. */}
+            {/* Body — rendered by <StepBody/>. The markdown string streams in
+                during the generating phase; react-markdown re-parses on every
+                chunk but its component overrides are module-level (stable
+                identity) so the DOM subtree is preserved rather than
+                recreated. The inpainting overlay dissolves the body when an
+                action runs; the parent motion envelope handles the stagger so
+                individual markdown nodes do NOT animate (keeps Koch budget
+                < 600ms). */}
             <div className="relative min-h-[1rem]">
               <AnimatePresence mode="wait">
                 {isInpainting ? (
@@ -168,25 +188,36 @@ function StepCardImpl({
                     animate={{ opacity: 0.35 }}
                     exit={{ opacity: 1 }}
                     transition={inpaintingDissolve}
-                    className="font-body text-sm leading-relaxed text-brand-400"
+                    className="flex flex-col gap-3"
                   >
-                    {step.body || '…'}
-                    <span className="font-body ml-2 text-xs uppercase tracking-[0.1em] text-brand-300">
+                    {step.body?.trim() ? (
+                      <StepBody markdown={step.body} isInpainting={true} />
+                    ) : (
+                      <p className="font-body text-sm leading-relaxed text-brand-400">
+                        …
+                      </p>
+                    )}
+                    <span className="font-body text-xs uppercase tracking-[0.1em] text-brand-300">
                       {step.inpainting}…
                     </span>
                   </motion.div>
                 ) : (
-                  <motion.p
+                  <motion.div
                     key="body-text"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     transition={inpaintingResolve}
-                    className="font-body text-sm leading-relaxed text-leather"
+                    className="flex flex-col gap-3"
                   >
-                    {step.body ||
-                      'We are shaping this step. Pick your preferences below and we will fill in the details.'}
-                  </motion.p>
+                    {step.body?.trim() ? (
+                      <StepBody markdown={step.body} isInpainting={false} />
+                    ) : (
+                      <p className="font-body text-sm leading-relaxed text-leather">
+                        We are shaping this step. Pick your preferences below and we will fill in the details.
+                      </p>
+                    )}
+                  </motion.div>
                 )}
               </AnimatePresence>
             </div>

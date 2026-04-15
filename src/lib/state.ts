@@ -20,6 +20,7 @@ export type Phase =
   | 'discovery'
   | 'materializing'
   | 'sculpting'
+  | 'build'
   | 'generating'
   | 'complete'
 
@@ -83,4 +84,35 @@ export const DEFAULT_PERSONAL: PersonalPills = {
   duration: '30min',
   mode: 'intermediate',
   budget: 'free-tier',
+}
+
+// -----------------------------------------------------------------------------
+// Pill origin tracking (Gap #1 — close the "illusion of user choice")
+// -----------------------------------------------------------------------------
+//
+// Personal pills always have a value (the engine seeds defaults so the UI
+// can render a complete row immediately). But students cannot tell whether a
+// pill is an engine default, an AI-proposed value from the skeleton call, or
+// something they confirmed. PillOrigin tracks that provenance as a parallel
+// slice so MetadataRow can render three distinct visual states without
+// inflating the existing PersonalPills shape.
+//
+// 'default'        — engine seed (student has not interacted, Claude has not
+//                    weighed in yet). Renders as dotted hint.
+// 'ai-picked'      — Claude proposed this via the skeleton's difficulty /
+//                    timeMinutes fields. Renders with an "AI" badge.
+// 'user-confirmed' — the student tapped the pill to commit a value. Renders
+//                    as the current solid chip.
+export type PillOrigin = 'default' | 'ai-picked' | 'user-confirmed'
+
+export interface PersonalPillOrigins {
+  duration: PillOrigin
+  mode: PillOrigin
+  budget: PillOrigin
+}
+
+export const DEFAULT_PERSONAL_ORIGINS: PersonalPillOrigins = {
+  duration: 'default',
+  mode: 'default',
+  budget: 'default',
 }

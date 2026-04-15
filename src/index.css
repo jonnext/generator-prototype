@@ -1,3 +1,4 @@
+@import 'highlight.js/styles/atom-one-light.css';
 @import 'tailwindcss';
 
 /* Map the design tokens in tokens.css into Tailwind v4's theme so utilities
@@ -51,28 +52,48 @@ body {
 }
 
 /* Chat tray pulse — the one documented exception to the "springs not
-   keyframes" rule from the plan. A 2s sine-wave border glow that ticks
-   while the generating phase is active. Motion can do this with a
-   repeat animation, but the spring graph would be busy tracking a
-   value that never settles, which costs more than a GPU-compositing
-   CSS keyframe here. Reduced-motion disables the animation below. */
+   keyframes" rule from the plan. A 2s sine-wave breathing glow that ticks
+   while the generating phase is active. GPU-compositing CSS keyframe here
+   is cheaper than a spring tracking a never-settling value.
+
+   Uses the leather/brand palette (not the prior violet) so the pulse reads
+   as part of the NextWork visual language rather than an alien accent.
+   Glow is a two-layer effect at peak: a 3px leather ring + an enhanced
+   ambient shadow, both at ~14% opacity so the pill's content stays
+   readable while the breathing is clearly visible.
+
+   Reduced-motion disables the animation in the media query below. */
 @keyframes chat-pulse {
   0%, 100% {
     box-shadow:
-      0 0 0 0 rgba(139, 92, 246, 0),
-      var(--shadow-card);
+      0 0 0 0 rgba(27, 25, 24, 0),
+      var(--shadow-toolbar);
     border-color: var(--brand-50);
   }
   50% {
     box-shadow:
-      0 0 0 6px rgba(139, 92, 246, 0.12),
-      var(--shadow-card);
-    border-color: var(--brand-200);
+      0 0 0 3px rgba(27, 25, 24, 0.14),
+      0 8px 24px -4px rgba(27, 25, 24, 0.18),
+      var(--shadow-toolbar);
+    border-color: var(--brand-300);
   }
 }
 
 .chat-tray-pulse {
   animation: chat-pulse 2s ease-in-out infinite;
+}
+
+/* Typography scale — mirrors production's typography-h{N} classes roughly
+   (production uses Suisse Neue; we're accepting FK Grotesk Neue as the
+   20% divergence). Used by StepBody's h2/h3/h4 markdown overrides. */
+.typography-h2 {
+  @apply font-heading font-semibold text-xl leading-tight text-leather mt-6 mb-2;
+}
+.typography-h3 {
+  @apply font-heading font-semibold text-lg leading-snug text-leather mt-5 mb-2;
+}
+.typography-h4 {
+  @apply font-heading font-medium text-base leading-snug text-leather mt-4 mb-2;
 }
 
 /* Respect reduced-motion universally — Motion springs still honour this via

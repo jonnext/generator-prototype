@@ -7,8 +7,15 @@
 // element" across screens without string duplication.
 
 export const layoutIds = {
-  /** Shared input used for Discovery -> Canvas docked chat tray transition. */
+  /** Shared input used for Discovery -> Canvas docked chat tray transition.
+   *  Carried from SearchInput (legacy) -> ToolbarInput (expanded Discovery
+   *  state) -> ChatTray composer (expanded Canvas state) so Motion treats
+   *  them as one morphing element across phase changes. */
   chatInput: 'chat-input',
+  /** Shared toolbar pill <-> expanded ToolbarInput morph target. The pill
+   *  collapses into this layoutId and the expanded input takes it over so
+   *  Motion interpolates corners, size, and position between the two. */
+  toolbarInput: 'toolbar-input',
   /** Shared project header wrapper (badge + title + description) across canvas phases. */
   projectHeader: 'project-header',
   /** Shared project badge from Discovery tile -> Canvas ProjectHeader. */

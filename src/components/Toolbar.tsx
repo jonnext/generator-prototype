@@ -103,9 +103,6 @@ export interface ToolbarProps {
   intent: string
   /** Whether a Claude stream is in flight — drives the pulse + chat interrupt routing. */
   isGenerating: boolean
-  /** Research fan-out play-by-play label. When non-null, displayed in place
-   *  of the "Writing…" chip during the materializing phase's research step. */
-  researchStatus?: string | null
 
   /** Discovery mode submit handler — same path DiscoveryScreen used to call. */
   onGenerate: (value: string) => void
@@ -126,7 +123,6 @@ function ToolbarImpl({
   phase,
   intent,
   isGenerating,
-  researchStatus,
   onGenerate,
   chatMessages,
   isChatOpen,
@@ -225,7 +221,6 @@ function ToolbarImpl({
             isChatOpen={isChatOpen}
             pulseClass={pulseClass}
             chatMessages={chatMessages}
-            researchStatus={researchStatus}
             onOpenChat={handleOpenCanvasChat}
             onCloseChat={onCloseChat}
             onChatSend={onChatSend}
@@ -329,7 +324,6 @@ interface CanvasToolbarProps {
   isChatOpen: boolean
   pulseClass: string
   chatMessages: ChatMessage[]
-  researchStatus?: string | null
   onOpenChat: () => void
   onCloseChat: () => void
   onChatSend: (text: string, isInterrupt: boolean) => void
@@ -341,7 +335,6 @@ function CanvasToolbarImpl({
   isChatOpen,
   pulseClass,
   chatMessages,
-  researchStatus,
   onOpenChat,
   onCloseChat,
   onChatSend,
@@ -386,11 +379,7 @@ function CanvasToolbarImpl({
           className={`flex w-full min-h-[56px] items-center gap-3 rounded-2xl border border-brand-50 bg-warm-white pl-5 pr-1.5 py-1.5 text-left shadow-[var(--shadow-toolbar)] transition-colors hover:border-brand-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-200 ${pulseClass}`}
         >
           <span className="font-body flex-1 truncate text-sm text-brand-400">
-            {researchStatus
-              ? `${researchStatus}…`
-              : isGenerating
-                ? 'Writing… tap to interrupt'
-                : promptLabel}
+            {isGenerating ? 'Writing… tap to interrupt' : promptLabel}
           </span>
           <span className="font-heading inline-flex min-h-[44px] items-center rounded-xl bg-leather px-5 text-sm text-paper">
             Chat

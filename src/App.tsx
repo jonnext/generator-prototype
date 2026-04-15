@@ -23,7 +23,7 @@
 // Per rendering-conditional-render we use a ternary, never &&.
 
 import { AnimatePresence } from 'motion/react'
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
+import { startTransition, useCallback, useEffect, useRef } from 'react'
 import { DiscoveryScreen } from '@/screens/DiscoveryScreen'
 import { CanvasScreen } from '@/screens/CanvasScreen'
 import { Toolbar } from '@/components/Toolbar'
@@ -35,17 +35,6 @@ import {
   timeMinutesToDurationId,
   type ActionPlanSkeleton,
 } from '@/lib/actionPlan'
-import { fetchResearch, formatResearchForPrompt, type ResearchMode } from '@/lib/research'
-
-// Research mode is read from ?mode=exa-only on first load and pinned for the
-// session. No reactivity to URL changes — switching modes requires a reload,
-// which is the cheapest A/B for the demo.
-function getResearchMode(): ResearchMode {
-  if (typeof window === 'undefined') return 'full'
-  const params = new URLSearchParams(window.location.search)
-  return params.get('mode') === 'exa-only' ? 'exa-only' : 'full'
-}
-const RESEARCH_MODE: ResearchMode = getResearchMode()
 import {
   buildStepBodyPrompt,
   buildInpaintingPrompt,
@@ -207,14 +196,6 @@ export function App() {
   // array would recreate the callback on every message, churning Toolbar
   // props and defeating useCallback memoization.
   const chatMessagesRef = useRef<ChatMessage[]>(chat.messages)
-
-  // Research status surfaced in the Toolbar's "Writing…" chip during the
-  // research fan-out phase. Null when no research is in flight. Cycles
-  // through per-tool labels while fetchResearch runs — the cadence is an
-  // illusion of progress since the backend returns all three tools at
-  // once, but it's honest enough for the demo. Real SSE per-tool
-  // streaming is a follow-up.
-  const [researchStatus, setResearchStatus] = useState<string | null>(null)
   chatMessagesRef.current = chat.messages
   // Phase ref follows the same mirror pattern so handleChatSend can read the
   // live phase without being recreated on every phase flip. Using an effect
@@ -265,47 +246,12 @@ export function App() {
 
       setPhase('materializing')
 
-      // ---- Research fan-out (Exa + Perplexity + Firecrawl) -------------
-      // Feeds Claude grounded evidence before the skeleton prompt. A failure
-      // here is non-fatal — the skeleton call falls back to zero-research
-      // mode so the student still gets an outline (just the pre-research
-      // quality level).
-      let researchContext = ''
-      const labels =
-        RESEARCH_MODE === 'exa-only'
-          ? ['Checking Exa']
-          : ['Checking Exa', 'Synthesising with Perplexity', 'Extracting with Firecrawl']
-      let labelIdx = 0
-      setResearchStatus(labels[0])
-      const statusTimer = setInterval(() => {
-        labelIdx = (labelIdx + 1) % labels.length
-        setResearchStatus(labels[labelIdx])
-      }, 1500)
-
-      try {
-        const research = await fetchResearch(nextIntent, {
-          mode: RESEARCH_MODE,
-          signal,
-        })
-        researchContext = formatResearchForPrompt(research)
-      } catch (err) {
-        if (!signal.aborted) {
-          console.warn('Research fan-out failed — continuing without context', err)
-        }
-      } finally {
-        clearInterval(statusTimer)
-        setResearchStatus(null)
-      }
-
-      if (signal.aborted) return
-
       // ---- Action Plan skeleton (non-streaming, full object) -------------
       let skeleton: ActionPlanSkeleton
       try {
         const { system, user } = buildActionPlanPrompt({
           intent: nextIntent,
           personal: personalRef.current,
-          researchContext,
         })
         const messages = [
           { role: 'user' as const, content: user },
@@ -691,7 +637,6 @@ export function App() {
         phase={phase}
         intent={intent}
         isGenerating={selectIsGenerating(phase)}
-        researchStatus={researchStatus}
         onGenerate={handleGenerate}
         chatMessages={chat.messages}
         isChatOpen={chat.isOpen}

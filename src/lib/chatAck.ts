@@ -27,10 +27,9 @@ export interface BuildChatAckPromptInput {
   /** The current project title (so the ack can reference it if useful). */
   currentTitle: string
   /**
-   * Current generation phase. Gap #2 phase-aware gating means the canvas
-   * regeneration is DEFERRED during 'build' / 'generating' and runs live
-   * during 'sculpting' / 'complete'. The ack copy must match that reality
-   * so a deferred request reads as a promise, not a lie.
+   * Current generation phase. Post-DP1 the canvas always regenerates LIVE
+   * during 'learning' — there is no deferred-Build state anymore — so the
+   * ack copy maps cleanly to "updating the outline now".
    */
   currentPhase: Phase
   /** Recent chat history for conversational continuity. Kept to the last 3. */
@@ -45,18 +44,11 @@ export interface BuildChatAckPromptOutput {
 export function buildChatAckPrompt(
   input: BuildChatAckPromptInput,
 ): BuildChatAckPromptOutput {
-  // Phase-specific copy rules. The ack is the ONLY visible response the
-  // student gets until the canvas updates (or doesn't), so it needs to
-  // accurately reflect whether the canvas is regenerating right now.
+  // Phase-specific copy rules. Post-DP1 the canvas always regenerates LIVE
+  // when chat lands, so the ack consistently reads as "updating the outline".
   //
-  // - build / generating → regeneration is DEFERRED (the current stream keeps
-  //   running). The ack names the change and says it'll apply on the next
-  //   Build tap.
-  // - complete           → regeneration is LIVE but existing step content
-  //   stays visible while new pills / structure land. The ack can name the
-  //   change and note that the canvas is updating.
-  // - sculpting          → regeneration is LIVE and there are no bodies to
-  //   preserve yet, so the ack is simply "updating the outline".
+  // - learning  → primary state. Outline regenerates live with the request.
+  // - focused   → student is inside Highway on one step; chat is step-scoped.
   // - discovery / materializing → should not reach this path, but we include
   //   a sane fallback so typing doesn't crash.
   const phaseRules: Record<Phase, string> = {
@@ -64,14 +56,10 @@ export function buildChatAckPrompt(
       '- Canvas state: starting fresh. Acknowledge the request and mention the outline is coming together now.',
     materializing:
       '- Canvas state: the outline is materializing for the first time. Acknowledge the request and mention it will be reflected in the outline that is landing now.',
-    sculpting:
-      '- Canvas state: the outline is visible but bodies have not been written yet. The outline is regenerating NOW with this change. Acknowledge the specific change and say you are updating the outline.',
-    build:
-      '- Canvas state: step bodies are actively being written. The change is DEFERRED — the current build continues uninterrupted. Acknowledge the specific change and explicitly say it will apply on the next Build tap. Do not imply the canvas is updating right now, because it is not. Example: "Got it — I will update the deployment target to EC2 when you tap Build next."',
-    generating:
-      '- Canvas state: step bodies are actively streaming in. The change is DEFERRED — the in-flight stream continues uninterrupted. Acknowledge the specific change and explicitly say it will apply on the next Build tap. Do not imply the canvas is updating right now, because it is not. Example: "Noted — I will tighten step 3 for beginners when you tap Build next."',
-    complete:
-      '- Canvas state: generation is complete. Pill choices and structure are regenerating NOW, and existing step content stays visible through the update. Acknowledge the specific change and mention that the existing content stays on screen while pills update.',
+    learning:
+      '- Canvas state: the outline is visible and the student is shaping it. The outline is regenerating NOW with this change. Acknowledge the specific change and say you are updating the outline.',
+    focused:
+      '- Canvas state: the student is inside Highway on one specific step. The chat input here is step-scoped — only that step refines. Acknowledge the specific change and mention the step being updated.',
   }
 
   const system = [
@@ -90,15 +78,11 @@ export function buildChatAckPrompt(
     'Phase-specific rules (CRITICAL — the ack must match what is actually happening on the canvas):',
     phaseRules[input.currentPhase],
     '',
-    'Examples (sculpting / complete — canvas IS updating):',
+    'Examples (canvas IS updating):',
     '- ✅ "Got it — swapping ECS for Lambda and updating the deployment steps to match. Give me a second."',
     '- ✅ "Making it beginner-friendly: simpler commands, fewer optional flags, more checkpoints."',
     '',
-    'Examples (build / generating — canvas is NOT updating right now):',
-    '- ✅ "Got it — I will switch the deployment target to EC2 when you tap Build next."',
-    '- ✅ "Noted — step 3 will get more beginner-friendly on the next Build."',
-    '',
-    'Bad examples (any phase):',
+    'Bad examples:',
     '- ❌ "I will consider your request and update the outline accordingly." (vague, no specific change named)',
     '- ❌ "Here is the new outline:..." (never write outline content — that belongs to the canvas)',
     '- ❌ "Are you sure you want to switch to Lambda?" (never ask — just commit)',

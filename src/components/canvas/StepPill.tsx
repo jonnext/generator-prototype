@@ -17,7 +17,6 @@
 import { motion, AnimatePresence } from 'motion/react'
 import { memo, useCallback } from 'react'
 import type { StepPillRow } from '@/lib/state'
-import { rationales } from '@/lib/copy'
 import { layoutShift, stepExpand } from '@/motion/springs'
 
 // The canonical "I don't know" option id. Using a sentinel so the row
@@ -42,6 +41,13 @@ export interface StepPillProps {
   /** Whether the row is currently open (showing all options) or collapsed
       to a chosen-chip. Derived by the parent StepCard from its own state. */
   isOpen: boolean
+  /**
+   * Rationale body shown when the student picked "I don't know" and the
+   * selection came from the AI. Sourced from ActionPlan.pillDefinitions in
+   * the parent (per RP1 — no longer looked up from copy.ts). Undefined when
+   * no rationale is available; the chip renders without the explanation.
+   */
+  rationale?: string
 }
 
 function StepPillImpl({
@@ -52,13 +58,13 @@ function StepPillImpl({
   onRandomize,
   onReopen,
   isOpen,
+  rationale,
 }: StepPillProps) {
   const { decisionType, selected, aiPicked } = row
 
   // Rationale is only shown when the current selection came from Randomize.
-  // rationales is keyed by decisionType; fall back to undefined if missing
-  // so copy gaps degrade silently rather than crashing the render.
-  const rationale = aiPicked ? rationales[decisionType] : undefined
+  // Passed in via prop from the plan's pillDefinitions map (RP1).
+  const rationaleBody = aiPicked ? rationale : undefined
 
   const handlePick = useCallback(
     (optionId: string) => {
@@ -147,11 +153,11 @@ function StepPillImpl({
               ) : null}
             </span>
             <span className="font-heading text-sm text-leather">
-              {rationale?.picked ?? selected}
+              {selected}
             </span>
-            {rationale ? (
+            {rationaleBody ? (
               <span className="font-body mt-1 text-xs leading-relaxed text-brand-500">
-                {rationale.body}
+                {rationaleBody}
               </span>
             ) : null}
           </motion.button>

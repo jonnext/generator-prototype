@@ -4,7 +4,12 @@
 //   POST /                  → Anthropic Messages API passthrough (mirrors api/claude.js)
 //                             The Vite dev proxy rewrites /api/claude → / on this port.
 //   POST /api/research      → research stack fan-out (Exa + Perplexity + Firecrawl)
-//                             The Vite dev proxy forwards /api/research verbatim.
+//                             The Vite dev proxy forwards /api/research verbatim. (RP1)
+//   POST /api/research-tool → per-tool dispatch (Exa | Perplexity | Firecrawl search |
+//                             Firecrawl scrape | Context7). Mirrors api/research-tool.js.
+//                             The Vite dev proxy forwards /api/research-tool verbatim. (DP1.5.C)
+//   POST /api/diagram       → Phase D architecture diagram (Gemini Nano Banana Pro).
+//                             Mirrors api/diagram.js. (DP1.6.B)
 //
 // Loads ./.env on startup for any vars not already in process.env.
 //
@@ -14,6 +19,8 @@
 import { createServer } from 'http'
 import { readFileSync, existsSync } from 'fs'
 import { runResearch } from './api/_lib/research.js'
+import { dispatchTool } from './api/research-tool.js'
+import { dispatchDiagram } from './api/diagram.js'
 
 loadDotEnv('./.env')
 
@@ -43,18 +50,36 @@ createServer(async (req, res) => {
     return
   }
 
+  if (url === '/api/research-tool') {
+    await handleResearchTool(req, res)
+    return
+  }
+
+  if (url === '/api/diagram') {
+    await handleDiagram(req, res)
+    return
+  }
+
   await handleClaude(req, res)
 }).listen(PORT, () => {
   console.log('')
   console.log(`  ✓  Generator v2 dev proxy on http://localhost:${PORT}`)
   console.log(`     POST /               → Anthropic Messages API${process.env.ANTHROPIC_API_KEY ? '' : ' (⚠ ANTHROPIC_API_KEY missing)'}`)
   console.log(`     POST /api/research   → research stack (Exa + Perplexity + Firecrawl)`)
+  console.log(`     POST /api/research-tool → per-tool dispatch (exa | perplexity | firecrawl-search | firecrawl-scrape | context7)`)
+  console.log(`     POST /api/diagram    → Phase D architecture diagram (Gemini Nano Banana Pro)${process.env.GEMINI_API_KEY ? '' : ' (⚠ GEMINI_API_KEY missing)'}`)
   const haveResearch =
     !!process.env.EXA_API_KEY && !!process.env.PERPLEXITY_API_KEY && !!process.env.FIRECRAWL_API_KEY
   if (!haveResearch) {
     console.log('')
     console.log('     ⚠  Research stack keys missing — /api/research will return per-tool errors.')
     console.log('        Add EXA_API_KEY, PERPLEXITY_API_KEY, FIRECRAWL_API_KEY to ./.env')
+  }
+  if (!process.env.CONTEXT7_API_KEY) {
+    console.log(`     ⚠  CONTEXT7_API_KEY not set — Context7 adapter will graceful-fail.`)
+  }
+  if (!process.env.GEMINI_API_KEY) {
+    console.log(`     ⚠  GEMINI_API_KEY not set — /api/diagram will return errors.`)
   }
   console.log('')
 })
@@ -156,6 +181,70 @@ async function handleResearch(req, res) {
   } catch (err) {
     res.writeHead(500, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+  }
+}
+
+async function handleResearchTool(req, res) {
+  let body = ''
+  for await (const chunk of req) body += chunk
+
+  let parsed
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Invalid JSON body' }))
+    return
+  }
+
+  const tool = typeof parsed?.tool === 'string' ? parsed.tool : null
+  if (tool === null) {
+    res.writeHead(400, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Missing required field: tool' }))
+    return
+  }
+
+  try {
+    const result = await dispatchTool(tool, parsed)
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    })
+    res.end(JSON.stringify(result))
+  } catch (err) {
+    res.writeHead(err?.message?.startsWith('Missing required field') ? 400 : 500, {
+      'Content-Type': 'application/json',
+    })
+    res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }))
+  }
+}
+
+async function handleDiagram(req, res) {
+  let body = ''
+  for await (const chunk of req) body += chunk
+
+  let parsed
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: 'Invalid JSON body' }))
+    return
+  }
+
+  try {
+    const result = await dispatchDiagram(parsed)
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    })
+    res.end(JSON.stringify(result))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    res.writeHead(message.startsWith('Missing required field') ? 400 : 500, {
+      'Content-Type': 'application/json',
+    })
+    res.end(JSON.stringify({ error: message }))
   }
 }
 

@@ -1,60 +1,40 @@
-// ProjectHeader — the canvas header that persists across all five phases
-// (materializing, sculpting, build, generating, complete). It holds the
-// kicker badge, the project title, and a one-line description — and as of
-// Thread 5, a Build button floated to the top-right of the title row.
+// ProjectHeader — the canvas header that persists across phases. It holds
+// the kicker badge, the project title, and a one-line description.
 //
 // The whole header wraps a single motion.div with layoutId="project-header"
 // so when the canvas re-lays out during phase transitions (step cards
 // appearing, chat tray docking, etc.) the header stays anchored and Motion
 // animates any size/position deltas via FLIP.
 //
-// Per rerender-no-inline-components this component is module-level and
-// wrapped in React.memo so a parent re-render (e.g. chat tray pulse tick)
-// does not invalidate the header tree.
+// DP1 removed the Build button — the dynamic-pathway model has no terminal
+// commit moment. Top-right slot is intentionally empty until DP6 wires Share.
 
 import { motion } from 'motion/react'
 import { memo } from 'react'
 import { layoutIds } from '@/motion/transitions'
 import { projectHeaderVariants } from '@/motion/choreography'
-import { sharedElement } from '@/motion/springs'
-import { BuildButton } from '@/components/canvas/BuildButton'
+import { focusMorph, sharedElement } from '@/motion/springs'
+import { SketchStatusPill } from '@/components/canvas/SketchStatusPill'
+import { Typewriter } from '@/components/Typewriter'
 import type { Phase } from '@/lib/state'
 
+const TYPEWRITER_SPEED_MS = 30
+const DESCRIPTION_OVERLAP_MS = 200
+
 export interface ProjectHeaderProps {
-  badge: string
+  /** Status text shown in the top-left pill ("Sketching your project", etc.). */
+  statusLabel: string
   title: string
   description: string
-  /** Current phase — controls whether the Build button is visible and its label state. */
+  /** Current phase — kept on the prop surface for future status decoration. */
   phase: Phase
-  /** Fires when the student taps Build. The parent flips phase sculpting -> build -> generating. */
-  onBuild: () => void
-}
-
-// BuildButton visibility rule: show it from sculpting onwards (the plan
-// skeleton is live so the student has something to commit). Hide during
-// materializing (skeleton cards haven't landed yet) and after complete
-// (nothing left to build). During build and generating we keep it visible
-// in its isBuilding state so the student sees the commit in flight.
-function shouldShowBuildButton(phase: Phase): boolean {
-  return (
-    phase === 'sculpting' || phase === 'build' || phase === 'generating'
-  )
-}
-
-function shouldShowBuildingLabel(phase: Phase): boolean {
-  return phase === 'build' || phase === 'generating'
 }
 
 function ProjectHeaderImpl({
-  badge,
+  statusLabel,
   title,
   description,
-  phase,
-  onBuild,
 }: ProjectHeaderProps) {
-  const showBuild = shouldShowBuildButton(phase)
-  const isBuilding = shouldShowBuildingLabel(phase)
-
   return (
     <motion.header
       layoutId={layoutIds.projectHeader}
@@ -63,21 +43,26 @@ function ProjectHeaderImpl({
       variants={projectHeaderVariants}
       initial="hidden"
       animate="visible"
-      className="flex w-full flex-col items-start gap-3"
+      className="flex w-full flex-col items-start gap-5"
     >
-      <span className="font-body text-[11px] uppercase tracking-[0.14em] text-brand-400">
-        {badge}
-      </span>
-      <div className="flex w-full items-start justify-between gap-4">
-        <h1 className="font-heading text-3xl leading-tight tracking-tight text-leather md:text-4xl">
-          {title}
-        </h1>
-        {showBuild ? (
-          <BuildButton onClick={onBuild} isBuilding={isBuilding} />
-        ) : null}
+      <div className="flex w-full items-center justify-between gap-4">
+        <motion.div layoutId={layoutIds.statusPill} transition={focusMorph}>
+          <SketchStatusPill label={statusLabel} />
+        </motion.div>
       </div>
-      <p className="font-body max-w-prose text-sm leading-relaxed text-brand-500 md:text-base">
-        {description}
+      <Typewriter
+        as="h1"
+        text={title}
+        speedMs={TYPEWRITER_SPEED_MS}
+        className="type-display-xl text-leather"
+      />
+      <p className="font-heading max-w-prose text-brand-500" style={{ fontSize: 'var(--text-reading)', lineHeight: 'var(--leading-reading)' }}>
+        {/* startDelay = title typing duration + small overlap so description begins as title finishes */}
+        <Typewriter
+          text={description}
+          speedMs={TYPEWRITER_SPEED_MS}
+          startDelay={title.length * TYPEWRITER_SPEED_MS + DESCRIPTION_OVERLAP_MS}
+        />
       </p>
     </motion.header>
   )

@@ -24,13 +24,17 @@ import {
   DEFAULT_PERSONAL_ORIGINS,
   type ActionPlan,
   type ChatMessage,
-  type InpaintingAction,
+  type ContentBlock,
+  type DiagramStatus,
   type PersonalPillOrigins,
   type PersonalPills,
   type Phase,
   type PillOrigin,
+  type ResearchFinding,
   type Step,
+  type StepGenerationStatus,
   type StepPillRow,
+  type SurfacedAs,
 } from '@/lib/state'
 
 // =============================================================================
@@ -208,14 +212,12 @@ type StepChoicesAction =
       selected: string
       aiPicked: boolean
     }
-  | {
-      type: 'START_INPAINTING'
-      stepId: string
-      action: Exclude<InpaintingAction, null>
-    }
-  | { type: 'STEP_BODY_CHUNK'; stepId: string; chunk: string }
-  | { type: 'STEP_BODY_COMPLETE'; stepId: string }
-  | { type: 'INPAINTING_COMPLETE'; stepId: string; newBody: string }
+  | { type: 'APPEND_STEP'; step: Step }
+  | { type: 'REMOVE_STEP'; stepId: string }
+  | { type: 'INSERT_STEP_AFTER'; afterStepId: string; step: Step }
+  | { type: 'SET_STEP_BLOCKS'; stepId: string; blocks: ContentBlock[] }
+  | { type: 'SET_STEP_GENERATION_STATUS'; stepId: string; status: StepGenerationStatus }
+  | { type: 'SET_DIAGRAM'; url?: string; status: DiagramStatus }
   | { type: 'RESET' }
 
 function mapStep(
@@ -259,48 +261,87 @@ function stepChoicesReducer(
       }
     }
 
-    case 'START_INPAINTING': {
+    case 'APPEND_STEP': {
+      if (!state.actionPlan) return state
+      return {
+        ...state,
+        actionPlan: {
+          ...state.actionPlan,
+          steps: [...state.actionPlan.steps, action.step],
+        },
+      }
+    }
+
+    case 'REMOVE_STEP': {
+      if (!state.actionPlan) return state
+      return {
+        ...state,
+        actionPlan: {
+          ...state.actionPlan,
+          steps: state.actionPlan.steps.filter((s) => s.id !== action.stepId),
+        },
+        expandedStepId:
+          state.expandedStepId === action.stepId ? null : state.expandedStepId,
+      }
+    }
+
+    case 'INSERT_STEP_AFTER': {
+      if (!state.actionPlan) return state
+      const idx = state.actionPlan.steps.findIndex(
+        (s) => s.id === action.afterStepId,
+      )
+      if (idx === -1) return state
+      const next = [...state.actionPlan.steps]
+      next.splice(idx + 1, 0, action.step)
+      return {
+        ...state,
+        actionPlan: { ...state.actionPlan, steps: next },
+      }
+    }
+
+    case 'SET_STEP_BLOCKS': {
+      // DP1.5 — Phase B populates step.blocks as section-generator passes
+      // resolve. Pass 1 writes Stage-1-informed blocks; Pass 2 overwrites with
+      // the Firecrawl-refreshed set. No merge — each pass produces the full
+      // block array for the step, and the crossfade lives in the renderer.
       if (!state.actionPlan) return state
       return {
         ...state,
         actionPlan: mapStep(state.actionPlan, action.stepId, (step) => ({
           ...step,
-          inpainting: action.action,
+          blocks: action.blocks,
         })),
       }
     }
 
-    case 'STEP_BODY_CHUNK': {
+    case 'SET_STEP_GENERATION_STATUS': {
+      // DP1.7.D — modular generation lifecycle. Producers: Phase B step-1-only
+      // mode (initial submit) and triggerNextStep (Continue CTA / pending alt
+      // trigger). Sculpt-driven block refresh (DP1.5.I) does NOT call this —
+      // status stays 'ready' across sculpt passes; only first-fill flips it.
       if (!state.actionPlan) return state
       return {
         ...state,
         actionPlan: mapStep(state.actionPlan, action.stepId, (step) => ({
           ...step,
-          body: step.body + action.chunk,
+          generationStatus: action.status,
         })),
       }
     }
 
-    case 'STEP_BODY_COMPLETE': {
+    case 'SET_DIAGRAM': {
+      // DP1.6 — Phase D writes diagram lifecycle onto the active plan. Status
+      // transitions roughly idle → generating → ready (with url) | failed.
+      // Cleared implicitly when SET_PLAN replaces the whole plan on a fresh
+      // submit — no separate reset needed.
       if (!state.actionPlan) return state
       return {
         ...state,
-        actionPlan: mapStep(state.actionPlan, action.stepId, (step) => ({
-          ...step,
-          isComplete: true,
-        })),
-      }
-    }
-
-    case 'INPAINTING_COMPLETE': {
-      if (!state.actionPlan) return state
-      return {
-        ...state,
-        actionPlan: mapStep(state.actionPlan, action.stepId, (step) => ({
-          ...step,
-          body: action.newBody,
-          inpainting: null,
-        })),
+        actionPlan: {
+          ...state.actionPlan,
+          diagramStatus: action.status,
+          diagramUrl: action.url ?? state.actionPlan.diagramUrl,
+        },
       }
     }
 
@@ -320,13 +361,29 @@ export interface StepChoicesSlice {
     selected: string,
     aiPicked: boolean,
   ) => void
-  startInpainting: (
-    stepId: string,
-    action: Exclude<InpaintingAction, null>,
-  ) => void
-  appendStepBodyChunk: (stepId: string, chunk: string) => void
-  stepBodyComplete: (stepId: string) => void
-  inpaintingComplete: (stepId: string, newBody: string) => void
+  appendStep: (step: Step) => void
+  removeStep: (stepId: string) => void
+  insertStepAfter: (afterStepId: string, step: Step) => void
+  /**
+   * DP1.5 — replace a step's content blocks. Phase B calls this after each
+   * section-generator pass resolves (Pass 1 with Stage 1 research, Pass 2
+   * with Stage 1+2 after Firecrawl returns). Fully replaces the prior blocks
+   * array; callers that want a crossfade handle that in the renderer.
+   */
+  setStepBlocks: (stepId: string, blocks: ContentBlock[]) => void
+  /**
+   * DP1.7.D — flip a single step's generation lifecycle state. Called by
+   * Phase B (step 1 'pending' → 'generating' → 'ready') and triggerNextStep
+   * (steps 2-N when the Continue CTA fires). Sculpt regen path stays out of
+   * this — it doesn't touch the lifecycle field.
+   */
+  setStepGenerationStatus: (stepId: string, status: StepGenerationStatus) => void
+  /**
+   * DP1.6 — Phase D diagram lifecycle. Pass status alone to flip state
+   * (e.g. setDiagram('generating')); pass url + status: 'ready' when the
+   * Gemini call resolves. No-op if there's no active actionPlan.
+   */
+  setDiagram: (status: DiagramStatus, url?: string) => void
   resetStepChoices: () => void
 }
 
@@ -355,23 +412,32 @@ export function useStepChoices(): StepChoicesSlice {
       }),
     [],
   )
-  const startInpainting = useCallback(
-    (stepId: string, action: Exclude<InpaintingAction, null>) =>
-      dispatch({ type: 'START_INPAINTING', stepId, action }),
+  const appendStep = useCallback(
+    (step: Step) => dispatch({ type: 'APPEND_STEP', step }),
     [],
   )
-  const appendStepBodyChunk = useCallback(
-    (stepId: string, chunk: string) =>
-      dispatch({ type: 'STEP_BODY_CHUNK', stepId, chunk }),
+  const removeStep = useCallback(
+    (stepId: string) => dispatch({ type: 'REMOVE_STEP', stepId }),
     [],
   )
-  const stepBodyComplete = useCallback(
-    (stepId: string) => dispatch({ type: 'STEP_BODY_COMPLETE', stepId }),
+  const insertStepAfter = useCallback(
+    (afterStepId: string, step: Step) =>
+      dispatch({ type: 'INSERT_STEP_AFTER', afterStepId, step }),
     [],
   )
-  const inpaintingComplete = useCallback(
-    (stepId: string, newBody: string) =>
-      dispatch({ type: 'INPAINTING_COMPLETE', stepId, newBody }),
+  const setStepBlocks = useCallback(
+    (stepId: string, blocks: ContentBlock[]) =>
+      dispatch({ type: 'SET_STEP_BLOCKS', stepId, blocks }),
+    [],
+  )
+  const setStepGenerationStatus = useCallback(
+    (stepId: string, status: StepGenerationStatus) =>
+      dispatch({ type: 'SET_STEP_GENERATION_STATUS', stepId, status }),
+    [],
+  )
+  const setDiagram = useCallback(
+    (status: DiagramStatus, url?: string) =>
+      dispatch({ type: 'SET_DIAGRAM', status, url }),
     [],
   )
   const resetStepChoices = useCallback(() => dispatch({ type: 'RESET' }), [])
@@ -382,10 +448,12 @@ export function useStepChoices(): StepChoicesSlice {
     setActionPlan,
     expandStep,
     setStepPill,
-    startInpainting,
-    appendStepBodyChunk,
-    stepBodyComplete,
-    inpaintingComplete,
+    appendStep,
+    removeStep,
+    insertStepAfter,
+    setStepBlocks,
+    setStepGenerationStatus,
+    setDiagram,
     resetStepChoices,
   }
 }
@@ -464,6 +532,106 @@ export function useChatTray(): ChatTraySlice {
 }
 
 // =============================================================================
+// Slice 5b — focus (Highway drill-in state + per-step chat history)
+// =============================================================================
+//
+// When the student taps "Refine Step →" on a collapsed step row, phase flips
+// to 'focused' and focusedStepId carries the target step's id. Highway reads
+// these to render its reading column. ExitFocus flips phase back to sculpting
+// and clears the id. Prev/next traversal is caller-computed (needs the plan's
+// step order) so this slice stays pure.
+//
+// stepChats persists per-step conversation history so re-entering step 02
+// remembers previous Highway-scope refinement turns. Chunk D wires the chat
+// dispatcher through this.
+
+interface FocusState {
+  focusedStepId: string | null
+  stepChats: Record<string, ChatMessage[]>
+}
+
+const INITIAL_FOCUS: FocusState = {
+  focusedStepId: null,
+  stepChats: {},
+}
+
+type FocusAction =
+  | { type: 'FOCUS_STEP'; stepId: string | null }
+  | { type: 'ADD_STEP_MESSAGE'; stepId: string; message: ChatMessage }
+  | { type: 'CLEAN_REMOVED_STEP'; stepId: string }
+  | { type: 'RESET' }
+
+function focusReducer(state: FocusState, action: FocusAction): FocusState {
+  switch (action.type) {
+    case 'FOCUS_STEP':
+      return { ...state, focusedStepId: action.stepId }
+    case 'ADD_STEP_MESSAGE': {
+      const prev = state.stepChats[action.stepId] ?? []
+      return {
+        ...state,
+        stepChats: {
+          ...state.stepChats,
+          [action.stepId]: [...prev, action.message],
+        },
+      }
+    }
+    case 'CLEAN_REMOVED_STEP': {
+      const { [action.stepId]: _, ...rest } = state.stepChats
+      return {
+        ...state,
+        focusedStepId:
+          state.focusedStepId === action.stepId ? null : state.focusedStepId,
+        stepChats: rest,
+      }
+    }
+    case 'RESET':
+      return INITIAL_FOCUS
+  }
+}
+
+export interface FocusSlice {
+  focusedStepId: string | null
+  stepChats: Record<string, ChatMessage[]>
+  /** Enter or exit Highway for a specific step id (pass null to exit). */
+  focusStep: (stepId: string | null) => void
+  /** Convenience wrapper — clears focusedStepId. */
+  exitFocus: () => void
+  /** Append a step-scoped chat message. Chunk D wires the dispatcher. */
+  addStepMessage: (stepId: string, message: ChatMessage) => void
+  /** Cleanup focusedStepId + stepChats when a step is removed from the plan. */
+  cleanRemovedStep: (stepId: string) => void
+  resetFocus: () => void
+}
+
+export function useFocus(): FocusSlice {
+  const [{ focusedStepId, stepChats }, dispatch] = useReducer(
+    focusReducer,
+    INITIAL_FOCUS,
+  )
+
+  const focusStep = useCallback(
+    (stepId: string | null) => dispatch({ type: 'FOCUS_STEP', stepId }),
+    [],
+  )
+  const exitFocus = useCallback(
+    () => dispatch({ type: 'FOCUS_STEP', stepId: null }),
+    [],
+  )
+  const addStepMessage = useCallback(
+    (stepId: string, message: ChatMessage) =>
+      dispatch({ type: 'ADD_STEP_MESSAGE', stepId, message }),
+    [],
+  )
+  const cleanRemovedStep = useCallback(
+    (stepId: string) => dispatch({ type: 'CLEAN_REMOVED_STEP', stepId }),
+    [],
+  )
+  const resetFocus = useCallback(() => dispatch({ type: 'RESET' }), [])
+
+  return { focusedStepId, stepChats, focusStep, exitFocus, addStepMessage, cleanRemovedStep, resetFocus }
+}
+
+// =============================================================================
 // Slice 5 — transient interaction refs (hover, focus, drag)
 // =============================================================================
 //
@@ -486,6 +654,177 @@ export function useTransientRefs(): TransientRefsSlice {
 }
 
 // =============================================================================
+// Slice 6 — research store (DP1.5.D)
+// =============================================================================
+//
+// Phase R (the active research layer introduced in DP1.5) streams findings
+// from Exa + Perplexity + Firecrawl + Context7 into this slice as the
+// orchestrator works. Consumers that need findings for a specific step read
+// via the selectFindingsByStep selector rather than subscribing to the
+// whole findings dictionary — findings keyed by id give O(1) upsert without
+// needing a separate per-step index.
+//
+// We intentionally DON'T store findingsByStep as a denormalized index. The
+// index is derived from findings[*].relatedStepIds at render time via the
+// selector, so we avoid dual-updates that could desync. For the prototype's
+// finding volume (tens per session, not thousands) the linear scan is
+// cheap — render-time filtering costs nothing compared to an O(n) reducer
+// that has to keep a secondary map in lockstep.
+//
+// PRUNE_STALE_FOR_STEP is the cross-slice cleanup point called from
+// handleRemoveStep — it either drops findings orphaned by the removed step
+// or just filters the step id from multi-step findings' relatedStepIds so
+// they no longer surface on that row without destroying the finding data.
+
+interface ResearchStoreState {
+  findings: Record<string, ResearchFinding>
+}
+
+const INITIAL_RESEARCH: ResearchStoreState = {
+  findings: {},
+}
+
+type ResearchStoreAction =
+  | { type: 'ADD_FINDING'; finding: ResearchFinding }
+  | { type: 'MARK_SURFACED'; findingId: string; surfacedAs: SurfacedAs }
+  | { type: 'FLAG_BRANCH_CANDIDATE'; findingId: string }
+  | { type: 'PRUNE_STALE_FOR_STEP'; stepId: string }
+  | { type: 'RESET' }
+
+function researchStoreReducer(
+  state: ResearchStoreState,
+  action: ResearchStoreAction,
+): ResearchStoreState {
+  switch (action.type) {
+    case 'ADD_FINDING':
+      // Upsert by id. Orchestrator dedup happens upstream (sliding window)
+      // so a same-id re-ADD here is intentional — e.g. a pending finding
+      // landing as ready, or a finding being re-scoped to a new step.
+      return {
+        findings: {
+          ...state.findings,
+          [action.finding.id]: action.finding,
+        },
+      }
+
+    case 'MARK_SURFACED': {
+      const existing = state.findings[action.findingId]
+      if (!existing) return state
+      return {
+        findings: {
+          ...state.findings,
+          [action.findingId]: { ...existing, surfacedAs: action.surfacedAs },
+        },
+      }
+    }
+
+    case 'FLAG_BRANCH_CANDIDATE': {
+      const existing = state.findings[action.findingId]
+      if (!existing) return state
+      return {
+        findings: {
+          ...state.findings,
+          [action.findingId]: { ...existing, significance: 'branch-candidate' },
+        },
+      }
+    }
+
+    case 'PRUNE_STALE_FOR_STEP': {
+      // For each finding that touched this step: if it was only about this
+      // step, drop it. If it spans multiple steps, just peel this step id
+      // off the relatedStepIds array so the remaining steps keep their
+      // context. Rationale: research about "containers" might legitimately
+      // serve step 2 AND step 4; removing step 2 shouldn't blow away the
+      // step 4 context.
+      let mutated = false
+      const next: Record<string, ResearchFinding> = {}
+      for (const [id, finding] of Object.entries(state.findings)) {
+        if (!finding.relatedStepIds.includes(action.stepId)) {
+          next[id] = finding
+          continue
+        }
+        mutated = true
+        const filtered = finding.relatedStepIds.filter(
+          (s) => s !== action.stepId,
+        )
+        if (filtered.length === 0) continue
+        next[id] = { ...finding, relatedStepIds: filtered }
+      }
+      return mutated ? { findings: next } : state
+    }
+
+    case 'RESET':
+      return INITIAL_RESEARCH
+  }
+}
+
+export interface ResearchStoreSlice {
+  findings: Record<string, ResearchFinding>
+  /**
+   * Upsert a finding into the store. Called by the research orchestrator
+   * (DP1.5.E) as adapter calls resolve — one addFinding per Exa call, one
+   * per Perplexity call, one per Firecrawl scrape, etc.
+   */
+  addFinding: (finding: ResearchFinding) => void
+  /**
+   * Record that a finding has been rendered in the UI, so the renderer
+   * doesn't re-promote it. Called by StepCard after rendering a research
+   * snippet into block context, by BranchChip after showing a branch
+   * candidate, and by StepPill after surfacing a finding as pill context.
+   */
+  markFindingSurfaced: (findingId: string, surfacedAs: SurfacedAs) => void
+  /**
+   * Promote a finding to branch-candidate significance — DP1.5.J's
+   * orchestrator heuristic calls this when Firecrawl/Perplexity surface
+   * content that contradicts the current pill choice or step framing.
+   */
+  flagBranchCandidate: (findingId: string) => void
+  /**
+   * Cross-slice cleanup entry point called from handleRemoveStep when a
+   * step is deleted. Drops orphaned findings and filters multi-step
+   * findings so the removed step id no longer appears in relatedStepIds.
+   */
+  pruneStaleForStep: (stepId: string) => void
+  resetResearch: () => void
+}
+
+export function useResearchStore(): ResearchStoreSlice {
+  const [{ findings }, dispatch] = useReducer(
+    researchStoreReducer,
+    INITIAL_RESEARCH,
+  )
+
+  const addFinding = useCallback(
+    (finding: ResearchFinding) => dispatch({ type: 'ADD_FINDING', finding }),
+    [],
+  )
+  const markFindingSurfaced = useCallback(
+    (findingId: string, surfacedAs: SurfacedAs) =>
+      dispatch({ type: 'MARK_SURFACED', findingId, surfacedAs }),
+    [],
+  )
+  const flagBranchCandidate = useCallback(
+    (findingId: string) =>
+      dispatch({ type: 'FLAG_BRANCH_CANDIDATE', findingId }),
+    [],
+  )
+  const pruneStaleForStep = useCallback(
+    (stepId: string) => dispatch({ type: 'PRUNE_STALE_FOR_STEP', stepId }),
+    [],
+  )
+  const resetResearch = useCallback(() => dispatch({ type: 'RESET' }), [])
+
+  return {
+    findings,
+    addFinding,
+    markFindingSurfaced,
+    flagBranchCandidate,
+    pruneStaleForStep,
+    resetResearch,
+  }
+}
+
+// =============================================================================
 // Composition — useShapingEngine composes the slices
 // =============================================================================
 //
@@ -498,7 +837,9 @@ export interface ShapingEngineApi
     PersonalPillsSlice,
     StepChoicesSlice,
     ChatTraySlice,
-    TransientRefsSlice {
+    FocusSlice,
+    TransientRefsSlice,
+    ResearchStoreSlice {
   /** Convenience: sets phase to materializing and clears any prior plan. */
   startMaterializing: (intent: string) => void
   /** Convenience: stores the intent text (coarse granularity channel). */
@@ -506,6 +847,21 @@ export interface ShapingEngineApi
   setIntent: (intent: string) => void
   /** Convenience: resets every slice to initial. */
   reset: () => void
+  /** Cross-slice step removal: removes from plan + cleans focus/stepChats. */
+  handleRemoveStep: (stepId: string) => void
+  /**
+   * Enter Highway for a step — flips phase to 'focused' and sets focusedStepId
+   * in one dispatch. Used by StepCard's Refine chip and by useFocusNavigation's
+   * keyboard handlers. Caller is responsible for derived validation (e.g. the
+   * stepId must exist in the current plan).
+   */
+  enterFocus: (stepId: string) => void
+  /**
+   * Exit Highway — flips phase back to whichever pre-focus phase was active
+   * (sculpting or complete). Clears focusedStepId. Intentionally does NOT
+   * auto-advance to build; Done-on-last-step calls this with sculpting.
+   */
+  leaveFocus: () => void
 }
 
 export function useShapingEngine(): ShapingEngineApi {
@@ -513,17 +869,51 @@ export function useShapingEngine(): ShapingEngineApi {
   const personalSlice = usePersonalPills()
   const stepSlice = useStepChoices()
   const chatSlice = useChatTray()
+  const focusSlice = useFocus()
   const refsSlice = useTransientRefs()
+  const researchSlice = useResearchStore()
   const [intent, setIntentState] = useState('')
 
   const setIntent = useCallback((next: string) => setIntentState(next), [])
 
   // Cross-slice coordination lives here. Keep these actions stable with refs
   // to the latest setters so they don't churn on every render.
-  const { setPhase } = phaseSlice
-  const { setActionPlan, resetStepChoices } = stepSlice
+  const { phase, setPhase } = phaseSlice
+  const { setActionPlan, removeStep, resetStepChoices } = stepSlice
   const { resetChat } = chatSlice
+  const { focusStep, cleanRemovedStep, resetFocus } = focusSlice
   const { resetPersonal } = personalSlice
+  const { pruneStaleForStep, resetResearch } = researchSlice
+
+  const handleRemoveStep = useCallback(
+    (stepId: string) => {
+      removeStep(stepId)
+      cleanRemovedStep(stepId)
+      // DP1.5.D — drop or filter any research findings that reference this
+      // step so a re-added step id doesn't inherit stale findings.
+      pruneStaleForStep(stepId)
+    },
+    [removeStep, cleanRemovedStep, pruneStaleForStep],
+  )
+
+  // Remember which phase we came from so leaveFocus restores correctly. Using
+  // a ref avoids a useState that would re-render on every focus entry. The
+  // ref is populated inside enterFocus and read by leaveFocus.
+  const prevFocusPhaseRef = useRef<Phase>('learning')
+
+  const enterFocus = useCallback(
+    (stepId: string) => {
+      prevFocusPhaseRef.current = phase === 'focused' ? 'learning' : phase
+      focusStep(stepId)
+      setPhase('focused')
+    },
+    [focusStep, setPhase, phase],
+  )
+
+  const leaveFocus = useCallback(() => {
+    focusStep(null)
+    setPhase(prevFocusPhaseRef.current)
+  }, [focusStep, setPhase])
 
   const startMaterializing = useCallback(
     (next: string) => {
@@ -539,17 +929,31 @@ export function useShapingEngine(): ShapingEngineApi {
     resetStepChoices()
     resetChat()
     resetPersonal()
+    resetFocus()
+    resetResearch()
     setPhase('discovery')
-  }, [resetStepChoices, resetChat, resetPersonal, setPhase])
+  }, [
+    resetStepChoices,
+    resetChat,
+    resetPersonal,
+    resetFocus,
+    resetResearch,
+    setPhase,
+  ])
 
   return {
     ...phaseSlice,
     ...personalSlice,
     ...stepSlice,
     ...chatSlice,
+    ...focusSlice,
     ...refsSlice,
+    ...researchSlice,
     intent,
     setIntent,
+    handleRemoveStep,
+    enterFocus,
+    leaveFocus,
     startMaterializing,
     reset,
   }
@@ -563,8 +967,14 @@ export function useShapingEngine(): ShapingEngineApi {
 // data you already have. Exported here so all derived logic lives next to
 // the slices that feed it, and components don't reinvent their own derivation.
 
+/**
+ * Returns true when the engine is in the initial materialization flash
+ * (skeleton generation in flight). DP1: `generating` phase is gone — step
+ * bodies no longer stream — so this collapses to `materializing` only.
+ * Consumers use this to show the "writing…" status in the Toolbar.
+ */
 export function selectIsGenerating(phase: Phase): boolean {
-  return phase === 'generating' || phase === 'materializing'
+  return phase === 'materializing'
 }
 
 export function selectStepById(
@@ -584,4 +994,37 @@ export function selectPillByDecision(
   decisionType: string,
 ): StepPillRow | undefined {
   return step.pills.find((p) => p.decisionType === decisionType)
+}
+
+/**
+ * DP1.5.D — derived view of findings scoped to a single step id, newest
+ * first. Linear scan of the findings dictionary; fine for the prototype's
+ * per-session volume (tens of findings, not thousands). Components that
+ * need per-step research should call this in render rather than indexing
+ * in the reducer — render-time filtering is cheaper than maintaining a
+ * secondary map in lockstep.
+ */
+export function selectFindingsByStep(
+  findings: Record<string, ResearchFinding>,
+  stepId: string,
+): ResearchFinding[] {
+  const matches: ResearchFinding[] = []
+  for (const finding of Object.values(findings)) {
+    if (finding.relatedStepIds.includes(stepId)) matches.push(finding)
+  }
+  return matches.sort((a, b) => b.timestamp - a.timestamp)
+}
+
+/**
+ * DP1.5.J — findings flagged as branch candidates for a given step, newest
+ * first. DP1.5.J's BranchChip component reads this to decide whether to
+ * render a chip at the top of a StepCard.
+ */
+export function selectBranchCandidatesByStep(
+  findings: Record<string, ResearchFinding>,
+  stepId: string,
+): ResearchFinding[] {
+  return selectFindingsByStep(findings, stepId).filter(
+    (f) => f.significance === 'branch-candidate' && f.surfacedAs !== 'chip',
+  )
 }

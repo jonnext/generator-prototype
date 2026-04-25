@@ -1,8 +1,6 @@
-// CanvasScreen — the continuous canvas that spans four phases:
-//   1. materializing  (600ms staggered reveal of header + metadata + skeletons)
-//   2. sculpting      (step cards visible, pills interactive, no bodies yet)
-//   3. generating     (streaming step bodies in, chat tray docked)
-//   4. complete       (everything rendered, refine-or-continue affordances)
+// CanvasScreen — the continuous canvas that spans the post-discovery phases:
+//   1. materializing  (~600ms staggered reveal of header + metadata + skeletons)
+//   2. learning       (step cards visible, pills interactive, append/remove later)
 //
 // Critical invariant: ONE component mounts for the life of the canvas visit.
 // Phases modulate what the canvas SHOWS, never whether it exists. That keeps
@@ -23,23 +21,26 @@
 // I7 replaces the docked chat button with the full ChatTray.
 
 import { motion } from 'motion/react'
-import { memo, useCallback, useLayoutEffect, useMemo, useTransition } from 'react'
+import { Fragment, memo, useCallback, useLayoutEffect, useMemo, useTransition } from 'react'
+import { ArchitectureDiagram } from '@/components/canvas/ArchitectureDiagram'
+import { ContinueStepCTA } from '@/components/canvas/ContinueStepCTA'
 import { ProjectHeader } from '@/components/canvas/ProjectHeader'
 import { MetadataRow } from '@/components/canvas/MetadataRow'
+import { ResearchPulse } from '@/components/canvas/ResearchPulse'
 import { StepCard } from '@/components/canvas/StepCard'
 import {
   staggerParentVariants,
   stepCardVariants,
 } from '@/motion/choreography'
 import { sharedElement } from '@/motion/springs'
-import { rationales } from '@/lib/copy'
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion'
+import { selectBranchCandidatesByStep } from '@/hooks/useShapingEngine'
 import type {
   ActionPlan,
-  InpaintingAction,
   PersonalPillOrigins,
   PersonalPills,
   Phase,
+  ResearchFinding,
 } from '@/lib/state'
 
 // ----------------------------------------------------------------------------
@@ -63,40 +64,67 @@ export interface CanvasScreenProps {
     value: PersonalPills[K],
   ) => void
   expandStep: (stepId: string | null) => void
-  setStepPill: (
-    stepId: string,
-    decisionType: string,
-    selected: string,
-    aiPicked: boolean,
-  ) => void
-  startInpainting: (
-    stepId: string,
-    action: Exclude<InpaintingAction, null>,
-  ) => void
-  /** Fires when the student taps the Build button in ProjectHeader. */
-  onBuild: () => void
+  /**
+   * DP1.5.I — the App-owned handlers that flip the pill AND fire Phase R
+   * research + block regen. CanvasScreen forwards them verbatim to StepCard.
+   * Previously CanvasScreen wrapped the raw setStepPill to add the aiPicked
+   * flag; that's now centralized in App so research can re-fire on toggle.
+   */
+  onPickPill: (stepId: string, decisionType: string, selected: string) => void
+  onRandomizePill: (stepId: string, decisionType: string) => void
   onBack: () => void
+  /** REFINE STEP → chip click — enters Highway for the given step. */
+  onRefineStep: (stepId: string) => void
+  /** Remove a step from the plan. */
+  onRemoveStep: (stepId: string) => void
+  /** Add a new step at the end of the plan. */
+  onAddStep: () => void
+  /** Whether an add-step call is in flight. */
+  isAddingStep?: boolean
+  /** DP1.5.H — research orchestrator has in-flight calls. Shown as a
+   *  "Researching…" pulse in the top bar while findings stream in. */
+  isResearching?: boolean
+  /** DP1.5.J — research store findings dictionary (keyed by id). Used to
+   *  derive per-step branch candidates. Passing the full dictionary and
+   *  filtering here (memoized per-step) keeps StepCards memo-stable when
+   *  findings unrelated to a given step land. */
+  findings?: Record<string, ResearchFinding>
+  onBranchApply?: (finding: ResearchFinding, stepId: string) => void
+  onBranchDismiss?: (findingId: string) => void
+  /** DP1.7.G — alt trigger entry point. Forwarded to each StepCard so the
+   *  pending-state "Generate this step" link calls App's handleTriggerNextStep
+   *  with the target stepIndex. DP1.7.F's Continue CTA will share the same
+   *  callback, keeping both surfaces in sync. */
+  onTriggerStep?: (stepIndex: number) => void
 }
 
 // ----------------------------------------------------------------------------
 // Phase-aware badge copy (kicker above the project title)
 // ----------------------------------------------------------------------------
 
-function phaseBadge(phase: Phase): string {
+// Copy shown inside the SketchStatusPill (dark pill top-left). Matches 294-0
+// "● SKETCHING YOUR PROJECT" during sculpting. Kept terse because the pill is
+// small; the rich phase narrative lives in the dock copy below.
+function phaseStatusLabel(phase: Phase): string {
   switch (phase) {
     case 'materializing':
-      return 'Sketching your project…'
-    case 'sculpting':
-      return 'Shape it before we build'
-    case 'build':
-      return 'Locking it in…'
-    case 'generating':
-      return 'Writing the steps'
-    case 'complete':
-      return 'Ready to build'
+      return 'Sketching your project'
+    case 'learning':
+      return 'Sketching your project'
     default:
       return 'Project'
   }
+}
+
+// DP1.5.J — stable empty array reference so StepCards that have no branch
+// candidates keep their memoized props. Creating [] inline on each render
+// would churn their memo regardless of whether anything actually changed.
+const EMPTY_FINDINGS: ResearchFinding[] = []
+
+// DP1.7.F — stable no-op fallback for ContinueStepCTA when onTriggerStep
+// is unset. Module-level so the CTA's memo stays intact across renders.
+const noopTriggerStep = (_stepIndex: number) => {
+  void _stepIndex
 }
 
 // ----------------------------------------------------------------------------
@@ -113,10 +141,18 @@ function CanvasScreenImpl({
   setPhase,
   setPersonalPill,
   expandStep,
-  setStepPill,
-  startInpainting,
-  onBuild,
+  onPickPill,
+  onRandomizePill,
   onBack,
+  onRefineStep,
+  onRemoveStep,
+  onAddStep,
+  isAddingStep = false,
+  isResearching = false,
+  findings,
+  onBranchApply,
+  onBranchDismiss,
+  onTriggerStep,
 }: CanvasScreenProps) {
   // Phase transitions are non-urgent: wrap in startTransition so input
   // events stay responsive during heavy reflow.
@@ -167,7 +203,7 @@ function CanvasScreenImpl({
     actionPlan?.description ??
     "Shaping an outline now. You will be able to swap steps, choose tools, and regenerate anything before we build it."
 
-  const badge = useMemo(() => phaseBadge(phase), [phase])
+  const statusLabel = useMemo(() => phaseStatusLabel(phase), [phase])
 
   // Skeleton step cards during materializing — 5 placeholders reveal with
   // 60ms stagger for the Koch orchestrated feel before the real plan lands.
@@ -191,30 +227,23 @@ function CanvasScreenImpl({
     () => expandStep(null),
     [expandStep],
   )
-  const handlePickPill = useCallback(
-    (stepId: string, decisionType: string, selected: string) => {
-      setStepPill(stepId, decisionType, selected, false)
-    },
-    [setStepPill],
-  )
-  // Randomize resolves to the "AI picked" option name from copy rationales.
-  // The name of that option is the string students see on the chip.
-  const handleRandomizePill = useCallback(
-    (stepId: string, decisionType: string) => {
-      // Late import avoidance: we pull from the same copy module already
-      // imported by StepPill / ResearchCard. Local require style keeps the
-      // canvas screen lean — import is static, look up is inline.
-      const picked = pickRandomizeDefault(decisionType)
-      setStepPill(stepId, decisionType, picked, true)
-    },
-    [setStepPill],
-  )
-  const handleStartInpainting = useCallback(
-    (stepId: string, action: Exclude<InpaintingAction, null>) => {
-      startInpainting(stepId, action)
-    },
-    [startInpainting],
-  )
+  // DP1.5.I — pick + randomize handlers are now App-owned (they need to
+  // both flip the pill AND fire Phase R research). CanvasScreen just
+  // forwards the incoming props to StepCard.
+
+  // DP1.5.J — per-step branch candidates derived from the findings store.
+  // Memoized so StepCards only see a new array when *their* step's
+  // candidate set changes, not on every finding landing. Uses the empty-
+  // object fallback when findings is undefined so the hook deps array is
+  // always a stable reference.
+  const branchCandidatesByStep = useMemo(() => {
+    const empty: Record<string, ResearchFinding[]> = {}
+    if (!actionPlan || !findings) return empty
+    for (const step of actionPlan.steps) {
+      empty[step.id] = selectBranchCandidatesByStep(findings, step.id)
+    }
+    return empty
+  }, [actionPlan, findings])
 
   return (
     <main className="relative min-h-dvh w-full bg-paper text-leather">
@@ -223,7 +252,12 @@ function CanvasScreenImpl({
         transition={sharedElement}
         className="mx-auto flex min-h-dvh w-full max-w-[720px] flex-col gap-6 px-4 pt-10 pb-40 md:pt-16"
       >
-        {/* Top bar — Back link and optional phase advance (dev affordance) */}
+        {/* Top bar — Back link on the left; ResearchPulse + Skip reveal
+            on the right. The pulse is agent-as-teammate per the Strategic
+            Framing section of the plan — "Researching…" copy, not a
+            spinner. Persists across materializing → learning so students
+            see the research agent keep working even after the skeleton
+            lands. */}
         <div className="flex items-center justify-between">
           <button
             type="button"
@@ -232,24 +266,36 @@ function CanvasScreenImpl({
           >
             ← Discovery
           </button>
-          {phase === 'materializing' ? (
-            <button
-              type="button"
-              onClick={() => handlePhaseAdvance('sculpting')}
-              className="font-heading rounded-xl border border-brand-100 bg-warm-white px-3 py-1.5 text-xs text-leather"
-            >
-              Skip reveal
-            </button>
-          ) : null}
+          <div className="flex items-center gap-2">
+            <ResearchPulse active={isResearching} />
+            {phase === 'materializing' ? (
+              <button
+                type="button"
+                onClick={() => handlePhaseAdvance('learning')}
+                className="font-heading rounded-xl border border-brand-100 bg-warm-white px-3 py-1.5 text-xs text-leather"
+              >
+                Skip reveal
+              </button>
+            ) : null}
+          </div>
         </div>
 
         {/* ProjectHeader — shared element across phases via layoutId */}
         <ProjectHeader
-          badge={badge}
+          statusLabel={statusLabel}
           title={title}
           description={description}
           phase={phase}
-          onBuild={onBuild}
+        />
+
+        {/* DP1.6 — Phase D architecture diagram. Renders shimmer while
+            Gemini Pro draws (~20-25s), crossfades to image when ready,
+            renders nothing when status is idle/failed (graceful). */}
+        <ArchitectureDiagram
+          status={actionPlan?.diagramStatus}
+          diagramUrl={actionPlan?.diagramUrl}
+          title={actionPlan?.title ?? title}
+          stepHeadings={actionPlan?.steps.map((s) => s.heading) ?? []}
         />
 
         {/* MetadataRow — persistent medium-granularity pills */}
@@ -268,29 +314,49 @@ function CanvasScreenImpl({
           aria-label="Project steps"
         >
           {actionPlan
-            ? actionPlan.steps.map((step) => (
-                <motion.div key={step.id} variants={stepCardVariants}>
-                  <StepCard
-                    step={step}
-                    // During build/generating/complete phases, ALL step cards
-                    // auto-expand so streaming body content is visible across
-                    // all 5 steps at once. During sculpting (before Build) the
-                    // original single-expand behavior still applies so the
-                    // student can focus on one step's pills at a time.
-                    isExpanded={
-                      phase === 'build' ||
-                      phase === 'generating' ||
-                      phase === 'complete' ||
-                      expandedStepId === step.id
-                    }
-                    onExpand={handleExpandStep}
-                    onCollapse={handleCollapseStep}
-                    onPickPill={handlePickPill}
-                    onRandomizePill={handleRandomizePill}
-                    onStartInpainting={handleStartInpainting}
-                  />
-                </motion.div>
-              ))
+            ? actionPlan.steps.map((step, index) => {
+                // DP1.7.F — between-steps Continue CTA. Visible only when this
+                // step is 'ready' AND the next step is 'pending'. Hides the
+                // moment the CTA is tapped (next step flips to 'generating')
+                // and re-emerges once that step reaches 'ready' if step+2 is
+                // still pending. Sculpt-refresh path keeps status 'ready' so
+                // the CTA stays put across regen — no extra plumbing needed.
+                const nextStep = actionPlan.steps[index + 1]
+                const showContinueCTA =
+                  step.generationStatus === 'ready' &&
+                  nextStep !== undefined &&
+                  nextStep.generationStatus === 'pending'
+                return (
+                  <Fragment key={step.id}>
+                    <motion.div variants={stepCardVariants}>
+                      <StepCard
+                        step={step}
+                        stepIndex={index}
+                        pillDefinitions={actionPlan.pillDefinitions}
+                        isExpanded={expandedStepId === step.id}
+                        onExpand={handleExpandStep}
+                        onCollapse={handleCollapseStep}
+                        onPickPill={onPickPill}
+                        onRandomizePill={onRandomizePill}
+                        onRefineStep={onRefineStep}
+                        onRemoveStep={onRemoveStep}
+                        branchCandidates={branchCandidatesByStep[step.id] ?? EMPTY_FINDINGS}
+                        onBranchApply={onBranchApply}
+                        onBranchDismiss={onBranchDismiss}
+                        headingStartDelay={prefersReducedMotion ? 0 : index * 1500}
+                        onTriggerStep={onTriggerStep}
+                      />
+                    </motion.div>
+                    {showContinueCTA && nextStep ? (
+                      <ContinueStepCTA
+                        nextStepIndex={index + 1}
+                        nextStepHeading={nextStep.heading}
+                        onTrigger={onTriggerStep ?? noopTriggerStep}
+                      />
+                    ) : null}
+                  </Fragment>
+                )
+              })
             : skeletonStepIds.map((id, index) => {
                 // Each placeholder shows its step number + a pulsing loader
                 // bar so the student can feel the 5-step shape of the project
@@ -311,6 +377,16 @@ function CanvasScreenImpl({
                   </motion.div>
                 )
               })}
+          {actionPlan && phase === 'learning' ? (
+            <button
+              type="button"
+              onClick={onAddStep}
+              disabled={isAddingStep}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-brand-100 px-4 py-4 font-body text-sm text-brand-400 hover:border-brand-200 hover:text-leather transition-colors disabled:opacity-50 disabled:cursor-wait"
+            >
+              {isAddingStep ? 'Adding step…' : '+ Add step'}
+            </button>
+          ) : null}
         </motion.section>
       </motion.div>
       {/* ChatTray is mounted at App root (not here) so it survives phase
@@ -321,14 +397,3 @@ function CanvasScreenImpl({
 }
 
 export const CanvasScreen = memo(CanvasScreenImpl)
-
-// ----------------------------------------------------------------------------
-// Randomize helper — resolves "I don't know, you tell me" to a concrete
-// option name using the rationale copy. Falls back to the decisionType
-// string itself if no rationale is authored, so the state stays valid.
-// ----------------------------------------------------------------------------
-
-function pickRandomizeDefault(decisionType: string): string {
-  const rationale = rationales[decisionType]
-  return rationale?.picked ?? decisionType
-}

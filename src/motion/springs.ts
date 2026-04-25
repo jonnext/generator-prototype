@@ -72,6 +72,16 @@ export const inpaintingResolve: Transition = {
   mass: 1,
 }
 
+/** Shape→Highway morph (row→H1 step heading flight, status-pill morph). More
+ *  heavily damped than sharedElement so a large heading restyle + size change
+ *  reads editorial rather than rubbery. Total window ~500ms. Plan: 260/32/1. */
+export const focusMorph: Transition = {
+  type: 'spring',
+  stiffness: 260,
+  damping: 32,
+  mass: 1,
+}
+
 /** Reduced-motion replacement: cheap linear fades, no spring, no translate. */
 export const reducedLinear: Transition = {
   type: 'tween',

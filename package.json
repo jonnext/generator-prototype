@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@mendable/firecrawl-js": "^4.18.2",
+    "@paper-design/shaders-react": "^0.0.76",
     "exa-js": "^2.11.0",
     "highlight.js": "^11.11.1",
     "motion": "^11.15.0",

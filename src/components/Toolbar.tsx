@@ -74,6 +74,7 @@ import { NavItems } from '@/components/toolbar/NavItems'
 import { ToolbarLogo } from '@/components/toolbar/ToolbarLogo'
 import { ToolbarAvatar } from '@/components/toolbar/ToolbarAvatar'
 import { ChatTray } from '@/components/ChatTray'
+import { getDockCopy } from '@/lib/dockCopy'
 
 // ----------------------------------------------------------------------------
 // Phase -> mode selector
@@ -216,6 +217,7 @@ function ToolbarImpl({
           />
         ) : (
           <CanvasToolbar
+            phase={phase}
             intent={intent}
             isGenerating={isGenerating}
             isChatOpen={isChatOpen}
@@ -319,6 +321,7 @@ const DiscoveryToolbar = memo(DiscoveryToolbarImpl)
 // shell, one is the inner input.
 
 interface CanvasToolbarProps {
+  phase: Phase
   intent: string
   isGenerating: boolean
   isChatOpen: boolean
@@ -330,6 +333,7 @@ interface CanvasToolbarProps {
 }
 
 function CanvasToolbarImpl({
+  phase,
   intent,
   isGenerating,
   isChatOpen,
@@ -339,11 +343,10 @@ function CanvasToolbarImpl({
   onCloseChat,
   onChatSend,
 }: CanvasToolbarProps) {
-  // Show a sensible fallback string when we're on the canvas but haven't
-  // streamed an intent yet (edge case — should basically never render).
-  const promptLabel = intent.trim().length > 0
-    ? intent
-    : 'Ask for a change, or tell me more about what you are building…'
+  // Dock hint copy is phase-driven via getDockCopy — Chunk A wires the
+  // sculpting-state copy ("All five steps ready — tap any to begin, or ask
+  // me to adjust the plan"). Chunk D extends it with refinement transitions.
+  const promptLabel = getDockCopy({ phase, intent })
 
   return (
     <AnimatePresence initial={false} mode="popLayout">
@@ -379,7 +382,7 @@ function CanvasToolbarImpl({
           className={`flex w-full min-h-[56px] items-center gap-3 rounded-2xl border border-brand-50 bg-warm-white pl-5 pr-1.5 py-1.5 text-left shadow-[var(--shadow-toolbar)] transition-colors hover:border-brand-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-200 ${pulseClass}`}
         >
           <span className="font-body flex-1 truncate text-sm text-brand-400">
-            {isGenerating ? 'Writing… tap to interrupt' : promptLabel}
+            {promptLabel}
           </span>
           <span className="font-heading inline-flex min-h-[44px] items-center rounded-xl bg-leather px-5 text-sm text-paper">
             Chat

@@ -2,8 +2,18 @@
 //
 // Given the student's intent (what they typed in Discovery) and their
 // personal pills (duration, mode, budget), build the Claude messages that
-// return the initial project skeleton: title, description, badge, and 5
-// step headings with the pill decision rows each step should carry.
+// return the initial project skeleton: title, description, badge, 5 step
+// headings, and — for each step — a set of pill DEFINITIONS (question +
+// option names + AI pick + rationale) that the UI renders as shaping
+// controls.
+//
+// RP1 change: Claude now emits the full pill definition inline with the
+// skeleton rather than just a slug. The prototype no longer has a hardcoded
+// allow-list of decisions (previously KNOWN_DECISION_SLUGS + copy.ts
+// researchComparisons); instead Claude invents project-relevant decision
+// types from context. This lets cooking prompts produce cooking pills,
+// frontend prompts produce frontend pills, etc. See the plan file
+// cozy-juggling-sutton.md for rationale.
 //
 // The output is JSON. We ask Claude to return a strict object shape so the
 // engine can parse it once with JSON.parse and seed the ActionPlan slice
@@ -16,7 +26,7 @@
 // whole skeleton at once to render all 5 step cards before step bodies
 // start streaming in parallel.
 
-import type { DurationId, PersonalPills } from './state'
+import type { DurationId, PersonalPills, PillDefinition } from './state'
 import { modes } from './copy'
 
 // ----------------------------------------------------------------------------
@@ -48,8 +58,8 @@ export function timeMinutesToDurationId(minutes: number): DurationId {
 
 // ----------------------------------------------------------------------------
 // Parsed shape Claude returns. Narrower than ActionPlan — no step bodies,
-// no inpainting state, no isComplete. Pills contain only the decisionType
-// slug; the UI fills selected/aiPicked as the student chooses.
+// no inpainting state, no isComplete. Each step carries full PillDefinition
+// entries (the reusable decision structures the UI renders).
 //
 // Production alignment (Thread 4): the field naming tracks the production
 // projects-app `StepSection` type at:
@@ -67,8 +77,12 @@ export function timeMinutesToDurationId(minutes: number): DurationId {
 export interface ActionPlanSkeletonStep {
   id: string
   heading: string
-  /** Pill decision slugs, e.g. ['container-service', 'deployment-method']. */
-  pillDecisions: string[]
+  /**
+   * Pill decisions for this step. Each entry carries the full definition
+   * (question + option names + AI pick + rationale) so downstream renderers
+   * do not need to look anything up in hardcoded copy.
+   */
+  pillDecisions: PillDefinition[]
 }
 
 export interface ActionPlanSkeleton {
@@ -82,27 +96,6 @@ export interface ActionPlanSkeleton {
   timeMinutes?: number
   category?: string
 }
-
-// ----------------------------------------------------------------------------
-// Known decision slugs — Claude may ONLY reference these in pillDecisions so
-// StepCard can resolve them against researchComparisons + rationales. Keep
-// in sync with the keys in copy.ts rationales/researchComparisons.
-// ----------------------------------------------------------------------------
-
-export const KNOWN_DECISION_SLUGS = [
-  'container-service',
-  'deployment-method',
-  'runtime',
-  'api-framework',
-  'api-hosting',
-  'storage',
-  'database',
-  'monitoring',
-  'monitoring-tool',
-  'cicd-tool',
-  'deploy-target',
-  'monitor-target',
-] as const
 
 // ----------------------------------------------------------------------------
 // Prompt builder
@@ -130,7 +123,7 @@ export function buildActionPlanPrompt(
   const hasResearch = typeof researchContext === 'string' && researchContext.trim().length > 0
 
   const system = [
-    'You are the NextWork project shaper. You help students design projects that teach a real skill. Projects can span any field — cloud, frontend, data science, machine learning, backend, developer tooling, math, physics, or anything else the student asks about. Do NOT assume a project must use AWS or any cloud provider unless the student mentions one.',
+    'You are the NextWork project shaper. You help students design projects that teach a real skill. Projects can span any field — cloud, frontend, data science, machine learning, backend, developer tooling, cooking, music, hardware, or anything else the student asks about. Do NOT assume a project must use AWS or any cloud provider unless the student mentions one.',
     '',
     'Your job right now is to sketch a project SKELETON, not the full build. The skeleton is a short, scannable outline that the student can immediately shape by swapping choices before any step is written in detail.',
     '',
@@ -153,22 +146,30 @@ export function buildActionPlanPrompt(
     'Output rules:',
     '- Return ONLY a single JSON object. No prose before or after. No code fences.',
     '- The JSON must match the schema in the user message exactly.',
-    '- pillDecisions MUST be drawn from this allow-list:',
-    `  ${KNOWN_DECISION_SLUGS.join(', ')}`,
-    '- Each step may have 0-2 pillDecisions. Pick the ones the student would genuinely be deciding at that step. Do not repeat the same slug across multiple steps.',
     '- Exactly 5 steps.',
-    '- Each step carries {id, heading} only at skeleton time. Step bodies are written later in a separate pass and are NOT returned here.',
+    '- Each step carries {id, heading, pillDecisions} only at skeleton time. Step bodies are written later in a separate pass and are NOT returned here.',
     '- Project-level metadata (difficulty, timeMinutes, category) must be present on the root object so the UI can populate the Mode and Duration pills without guessing.',
     '- difficulty: one of "beginner", "intermediate", "advanced" — matches the Modes pill.',
     '- timeMinutes: integer total build time, e.g. 15, 30, 60, 120 — maps to the Duration pill.',
-    '- category: short slug like "serverless", "containers", "data", "ml", "frontend".',
+    '- category: short slug like "serverless", "containers", "data", "ml", "frontend", "cooking", "music".',
+    '',
+    'pillDecisions rules (VERY IMPORTANT — these power the shaping surface):',
+    '- Each step carries 0-2 pill decisions. A pill represents a meaningful choice the student faces at that step — something they could reasonably pick differently and have a different project outcome.',
+    '- Each decision is a full object: {decisionType, question, optionNames, picked, rationale}.',
+    '- decisionType: a kebab-case slug you invent FROM THE PROJECT CONTEXT. Examples for various projects: "container-service", "egg-type", "auth-provider", "guitar-tuning", "color-palette", "sort-algorithm". Do NOT reuse irrelevant slugs from other topics.',
+    '- Do NOT repeat the same decisionType across multiple steps.',
+    '- question: the prompt question shown above the options, 2-8 words, ends with a question mark. Examples: "Which container service?", "Which egg type?", "Which tuning?".',
+    '- optionNames: exactly 3 options, each 1-4 words, title-cased as the student will see them on chips.',
+    '- picked: one of the 3 optionNames — the option you would default to for THIS student if they tap "I don\'t know, help me here". Consider their Mode (beginner vs advanced) and Duration.',
+    '- rationale: 1-2 sentences explaining why your picked option fits THIS project and THIS student. Evidence-based, educational. No motivational filler.',
+    '- A step with no meaningful decision should have pillDecisions: []. Do not invent filler pills.',
     ...(hasResearch
       ? [
           '',
           'Research context use:',
           '- You have been given real-time research results from a semantic search engine, an AI synthesis, and a general web search (below in the user message). These are grounded evidence for the project you design.',
           '- Use them to choose concrete, current, valid primitives (framework names, API shapes, deployment targets, costs) instead of guessing.',
-          '- If sources surface a known GitHub issue, a breaking change, or a pitfall, reflect that in the step headings or pillDecisions.',
+          '- If sources surface a known GitHub issue, a breaking change, or a pitfall, reflect that in the step headings, pillDecisions, or rationale text.',
           '- Where research contains cost figures, prefer concrete numbers over vague ranges when they affect the project shape.',
           '- Do NOT dump citation URLs into the skeleton fields. The skeleton stays terse; citations surface later in step bodies.',
         ]
@@ -191,14 +192,40 @@ export function buildActionPlanPrompt(
     '  "badge": "string — 2-3 words, lowercase, e.g. \\"serverless api\\" or \\"container deploy\\"",',
     '  "difficulty": "beginner | intermediate | advanced",',
     '  "timeMinutes": 60,',
-    '  "category": "string — short slug, e.g. \\"serverless\\" or \\"containers\\"",',
+    '  "category": "string — short slug, e.g. \\"serverless\\" or \\"cooking\\"",',
     '  "steps": [',
     '    {',
     '      "id": "s1",',
     '      "heading": "string — 2-6 words, imperative",',
-    '      "pillDecisions": ["optional-slug-from-allow-list"]',
+    '      "pillDecisions": [',
+    '        {',
+    '          "decisionType": "kebab-case-slug",',
+    '          "question": "Which X?",',
+    '          "optionNames": ["Option A", "Option B", "Option C"],',
+    '          "picked": "Option A",',
+    '          "rationale": "One or two sentences on why this default fits the project and this student."',
+    '        }',
+    '      ]',
     '    }',
     '  ]',
+    '}',
+    '',
+    'Example of a well-formed pill decision (for a project about deploying a containerized API):',
+    '{',
+    '  "decisionType": "container-service",',
+    '  "question": "Which container service?",',
+    '  "optionNames": ["ECS with Fargate", "ECS on EC2", "EKS"],',
+    '  "picked": "ECS with Fargate",',
+    '  "rationale": "ECS with Fargate is the most beginner-friendly path. No EC2 instances to manage, billed per task, and AWS handles the control plane."',
+    '}',
+    '',
+    'Example for a cooking project (shows that pill decisions fit ANY topic):',
+    '{',
+    '  "decisionType": "egg-freshness",',
+    '  "question": "Which egg freshness?",',
+    '  "optionNames": ["Fresh (1-3 days)", "Week-old", "Two-weeks-plus"],',
+    '  "picked": "Fresh (1-3 days)",',
+    '  "rationale": "Fresh eggs hold their shape best when poaching. Older eggs spread more in the water and give a ragged result."',
     '}',
     '',
     'Exactly 5 steps. Step ids must be s1 through s5 in order.',
@@ -222,6 +249,14 @@ export function buildActionPlanPrompt(
 // the shape, and returns an ActionPlanSkeleton or throws with a clear reason.
 // Tolerant of accidental leading/trailing whitespace and stray code fences
 // because Claude occasionally ignores format instructions on the first try.
+//
+// Pill validation is RESILIENT, not strict: malformed pill entries are
+// dropped silently, but a valid step with 0 good pills is still a valid
+// step. Rationale for resilience: the existing catch block at App.tsx:325
+// treats ANY parse failure as a hard reset to discovery phase, which reads
+// to the student as "Create button doesn't work". Per
+// feedback_materialization_first.md we'd rather ship an incomplete pill
+// list than reset phase.
 // ----------------------------------------------------------------------------
 
 export function parseActionPlanSkeleton(raw: string): ActionPlanSkeleton {
@@ -272,7 +307,6 @@ export function parseActionPlanSkeleton(raw: string): ActionPlanSkeleton {
     throw new Error(`Action plan must have exactly 5 steps, got ${parsed.steps.length}`)
   }
 
-  const allowList = new Set<string>(KNOWN_DECISION_SLUGS)
   const steps: ActionPlanSkeletonStep[] = parsed.steps.map((raw, index) => {
     if (!isRecord(raw)) {
       throw new Error(`Step ${index + 1} was not an object`)
@@ -291,12 +325,7 @@ export function parseActionPlanSkeleton(raw: string): ActionPlanSkeleton {
         `Action plan field "steps[${index}].heading" must be a non-empty string`,
       )
     }
-    const pillDecisionsRaw = raw.pillDecisions
-    const pillDecisions = Array.isArray(pillDecisionsRaw)
-      ? pillDecisionsRaw.filter(
-          (slug): slug is string => typeof slug === 'string' && allowList.has(slug),
-        )
-      : []
+    const pillDecisions = parsePillDecisions(raw.pillDecisions)
     return { id, heading: headingValue, pillDecisions }
   })
 
@@ -306,6 +335,80 @@ export function parseActionPlanSkeleton(raw: string): ActionPlanSkeleton {
 // ----------------------------------------------------------------------------
 // Internals
 // ----------------------------------------------------------------------------
+
+/**
+ * Parse the `pillDecisions` array for one step. Resilient — drops malformed
+ * entries rather than throwing, so a single bad pill doesn't crash the
+ * whole skeleton parse. Deduplicates by decisionType (first occurrence wins)
+ * in case Claude accidentally repeats a slug.
+ */
+export function parsePillDecisions(raw: unknown): PillDefinition[] {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set<string>()
+  const out: PillDefinition[] = []
+  for (const entry of raw) {
+    const pill = parseOnePill(entry)
+    if (pill === null) continue
+    if (seen.has(pill.decisionType)) continue
+    seen.add(pill.decisionType)
+    out.push(pill)
+  }
+  return out
+}
+
+/** Returns null when the entry is too malformed to recover. */
+function parseOnePill(entry: unknown): PillDefinition | null {
+  if (!isRecord(entry)) return null
+
+  const decisionType =
+    typeof entry.decisionType === 'string' && entry.decisionType.length > 0
+      ? normalizeSlug(entry.decisionType)
+      : null
+  if (decisionType === null || decisionType.length === 0) return null
+
+  const question =
+    typeof entry.question === 'string' && entry.question.length > 0
+      ? entry.question
+      : null
+  if (question === null) return null
+
+  const optionNames = Array.isArray(entry.optionNames)
+    ? entry.optionNames.filter(
+        (n): n is string => typeof n === 'string' && n.length > 0,
+      )
+    : []
+  // Require exactly 3 options — StepPill's layout assumes it.
+  if (optionNames.length !== 3) return null
+
+  const picked =
+    typeof entry.picked === 'string' && optionNames.includes(entry.picked)
+      ? entry.picked
+      : optionNames[0] // fallback to first option if Claude's pick doesn't match
+
+  const rationale =
+    typeof entry.rationale === 'string' && entry.rationale.length > 0
+      ? entry.rationale
+      : '' // tolerate missing rationale; UI shows empty gracefully
+
+  return { decisionType, question, options: optionNames, picked, rationale }
+}
+
+/**
+ * Normalize a Claude-emitted slug to strict kebab-case. Handles common
+ * inconsistencies like "EggType", "egg_type", "Egg Type" → "egg-type".
+ * Collapses non-alphanumeric runs to single hyphens and trims edges.
+ */
+function normalizeSlug(raw: string): string {
+  return raw
+    .trim()
+    // Insert hyphen between camelCase boundaries: "EggType" → "Egg-Type"
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .toLowerCase()
+    // Any non-alphanumeric run becomes a single hyphen.
+    .replace(/[^a-z0-9]+/g, '-')
+    // Trim leading/trailing hyphens.
+    .replace(/^-+|-+$/g, '')
+}
 
 function stripCodeFences(text: string): string {
   // Handles ```json ... ``` and plain ``` ... ``` wrappers.

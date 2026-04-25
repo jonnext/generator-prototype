@@ -22,6 +22,20 @@ export const layoutIds = {
   projectBadge: 'project-badge',
   /** Shared project title from Discovery tile -> Canvas ProjectHeader. */
   projectTitle: 'project-title',
+  /** Dark status pill top-left. Morphs from "● SKETCHING YOUR PROJECT" on
+   *  canvas to "● STEP 2 OF 5" inside Highway during the Shape->Highway
+   *  transition (Chunk C). Single shared element, content swaps via crossfade. */
+  statusPill: 'status-pill',
+  /** Per-step shared heading text node. Row H3 on canvas flies to the serif
+   *  H1 at the top of Highway's reading column during focus entry. One id
+   *  per step; factory function below keyed by step id. */
+  stepHeading: (stepId: string) => `step-heading-${stepId}`,
+  /** Per-step step number "01"/"02"/.../"05" shared across row prefix and
+   *  Highway section label. Gives the morph a second shared element to
+   *  rhyme with the heading's flight. */
+  stepNumber: (stepId: string) => `step-number-${stepId}`,
 } as const
 
-export type LayoutId = (typeof layoutIds)[keyof typeof layoutIds]
+// LayoutId is widened to string because some entries are factory functions
+// (stepHeading / stepNumber) that produce per-step ids at call time.
+export type LayoutId = string

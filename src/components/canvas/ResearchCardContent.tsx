@@ -26,10 +26,13 @@ function ResearchCardContentImpl({
   const comparison = researchComparisons[decisionType]
 
   if (!comparison) {
-    // Copy gap — degrade silently with a placeholder rather than throwing.
+    // RP1: researchComparisons is now a FALLBACK for 12 known slugs (AWS,
+    // container, API). For Claude-generated slugs (cooking, music, anything
+    // project-specific) we don't have authored pros/cons. Show the friendly
+    // placeholder instead. RP2 will fill this with lazy research synthesis.
     return (
       <p className="font-body text-xs text-brand-400">
-        No comparison available for this decision yet.
+        Detailed comparison coming soon — for now, the rationale above explains the AI's pick.
       </p>
     )
   }

@@ -24,6 +24,9 @@
   --font-heading: var(--font-heading);
   --font-body: var(--font-body);
   --font-code: var(--font-code);
+  --font-display: var(--font-display);
+
+  --color-accent-clay: var(--accent-clay);
 
   --radius-sm-token: var(--radius-sm);
   --radius-md-token: var(--radius-md);
@@ -96,6 +99,66 @@ body {
   @apply font-heading font-medium text-base leading-snug text-leather mt-4 mb-2;
 }
 
+/* Editorial type ramp — lifted from Paper canvas page HU-0. Display face is
+   Suisse Neue Medium, tight negative tracking, used for canvas + Highway H1s.
+   Reading body is FK Grotesk Neue at 18/28 for Highway prose. Small-caps
+   labels are Inter Bold with open tracking for section markers. */
+.type-display-xl {
+  font-family: var(--font-display);
+  font-size: var(--text-display-xl);
+  line-height: var(--leading-display-xl);
+  letter-spacing: var(--tracking-display-xl);
+  font-weight: 500;
+}
+.type-display-l {
+  font-family: var(--font-display);
+  font-size: var(--text-display-l);
+  line-height: var(--leading-display-l);
+  letter-spacing: var(--tracking-display-l);
+  font-weight: 500;
+}
+.type-reading {
+  font-family: var(--font-heading);
+  font-size: var(--text-reading);
+  line-height: var(--leading-reading);
+  font-weight: 400;
+}
+.type-label-m {
+  font-family: var(--font-body);
+  font-size: var(--text-label-m);
+  line-height: var(--leading-label-m);
+  letter-spacing: var(--tracking-label-m);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.type-label-s {
+  font-family: var(--font-body);
+  font-size: var(--text-label-s);
+  line-height: var(--leading-label-s);
+  letter-spacing: var(--tracking-label-s);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+/* Discovery globe — alternating-direction marquee rows.
+   Two keyframes (left, right) translate a duplicated track from 0 to -50%
+   so the second copy lands exactly where the first started, making the
+   loop seam invisible. translate3d keeps the work on the GPU compositor.
+   Pause-on-hover via :hover and pause-on-keyboard via :focus-within are
+   the rule that turns this from "wallpaper" into an interactive surface. */
+@keyframes marquee-left {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-50%, 0, 0); }
+}
+@keyframes marquee-right {
+  from { transform: translate3d(-50%, 0, 0); }
+  to   { transform: translate3d(0, 0, 0); }
+}
+.marquee-row:hover .marquee-track,
+.marquee-row:focus-within .marquee-track {
+  animation-play-state: paused;
+}
+
 /* Respect reduced-motion universally — Motion springs still honour this via
    usePrefersReducedMotion(), but we also neutralise any stray CSS transitions. */
 @media (prefers-reduced-motion: reduce) {
@@ -109,5 +172,9 @@ body {
   }
   .chat-tray-pulse {
     animation: none !important;
+  }
+  /* Marquees freeze in place — content stays visible, just unmoving. */
+  .marquee-track {
+    animation-play-state: paused !important;
   }
 }

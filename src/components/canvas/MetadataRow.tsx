@@ -125,13 +125,17 @@ interface MetaPillProps<T extends string> {
 // Per-origin class maps. Module-level constants so the MetaPill render body
 // stays declarative and the three visual states read as a ternary lookup
 // rather than nested conditionals. Follows rendering-conditional-render.
+//
+// 294-0 direction: capsule pills with a subtle border, SMALL-CAPS label + value
+// in regular case side-by-side. Taller (h-9) than the previous compact pill so
+// the editorial feel reads at display scale.
 const PILL_SHELL_CLASSES: Record<PillOrigin, string> = {
   default:
-    'font-body inline-flex items-center gap-1.5 rounded-full border border-dashed border-brand-200 bg-warm-white/60 px-3 py-1.5 text-xs text-brand-400 italic hover:border-brand-300 hover:text-leather focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200',
+    'inline-flex h-9 items-center gap-2 rounded-full border border-dashed border-brand-200 bg-warm-white/60 px-4 italic hover:border-brand-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200',
   'ai-picked':
-    'font-body inline-flex items-center gap-1.5 rounded-full border border-brand-200 bg-warm-white px-3 py-1.5 text-xs text-leather hover:border-brand-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200',
+    'inline-flex h-9 items-center gap-2 rounded-full border border-brand-100 bg-warm-white px-4 hover:border-brand-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200',
   'user-confirmed':
-    'font-body inline-flex items-center gap-1.5 rounded-full border border-brand-50 bg-warm-white px-3 py-1.5 text-xs text-leather hover:border-brand-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200',
+    'inline-flex h-9 items-center gap-2 rounded-full border border-brand-50 bg-warm-white px-4 hover:border-brand-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200',
 }
 
 // aria-label suffix keeps origin provenance available to assistive tech so
@@ -174,11 +178,7 @@ function MetaPillImpl<T extends string>({
       className={PILL_SHELL_CLASSES[origin]}
       aria-label={`${name}: ${current.label}. ${PILL_ARIA_SUFFIX[origin]}`}
     >
-      <span
-        className={
-          origin === 'default' ? 'text-brand-400' : 'text-brand-400'
-        }
-      >
+      <span className="type-label-s text-brand-400">
         {name}
       </span>
       {origin === 'ai-picked' ? (
@@ -192,8 +192,8 @@ function MetaPillImpl<T extends string>({
       <span
         className={
           origin === 'default'
-            ? 'font-heading text-brand-400'
-            : 'font-heading text-leather'
+            ? 'font-heading text-sm text-brand-400'
+            : 'font-heading text-sm text-leather'
         }
       >
         {current.label}

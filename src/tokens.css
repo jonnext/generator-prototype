@@ -29,6 +29,37 @@
   --font-body: 'Inter', system-ui, sans-serif;
   --font-code: 'SF Mono', 'Fira Code', monospace;
 
+  /* Editorial display — explicit system-serif stack.
+     Paper's canvas uses Suisse Neue Medium (not loaded in this prototype),
+     which happened to render as a system serif via the fallback chain — Jon
+     liked that aesthetic on 2026-04-15, so we cement it here with a
+     deterministic stack that renders consistently across macOS, iOS,
+     Windows, and Linux without any web-font load. */
+  --font-display: 'Iowan Old Style', 'New York', 'Palatino Linotype', 'Palatino',
+    'Georgia', 'Times New Roman', serif;
+  --text-display-xl: 56px;
+  --text-display-l: 42px;
+  --leading-display-xl: 62px;
+  --leading-display-l: 48px;
+  --tracking-display-xl: -0.03em;
+  --tracking-display-l: -0.02em;
+
+  /* Reading body — FK Grotesk Neue Regular, for Highway step body prose. */
+  --text-reading: 18px;
+  --leading-reading: 28px;
+
+  /* Small-caps section labels — Inter Bold 700, uppercase, open tracking. */
+  --text-label-m: 12px;
+  --text-label-s: 11px;
+  --leading-label-m: 16px;
+  --leading-label-s: 14px;
+  --tracking-label-m: 0.1em;
+  --tracking-label-s: 0.14em;
+
+  /* Accent — warm clay, used for Highway section labels (STEP 02 in
+     accent-clay reads as editorial punctuation, not a brand color). */
+  --accent-clay: #d97757;
+
   /* Shadows */
   --shadow-toolbar:
     0px 12px 16px -4px rgba(27, 25, 24, 0.08),

@@ -6,6 +6,15 @@
   "functions": {
     "api/claude.js": {
       "maxDuration": 60
+    },
+    "api/diagram.js": {
+      "maxDuration": 60
+    },
+    "api/research.js": {
+      "maxDuration": 60
+    },
+    "api/research-tool.js": {
+      "maxDuration": 60
     }
   }
 }

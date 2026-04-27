@@ -246,7 +246,43 @@ function CanvasScreenImpl({
   // lands; the empty→real transition is a single first-reveal because
   // text was '' at mount, so index was already 0 — no setIndex(0) reset.
   const title = useMemo(() => deriveTitleFromIntent(intent), [intent])
-  const description = actionPlan?.description ?? ''
+
+  // DP1.8.D.6 — single-cursor invariant. The header's description Typewriter
+  // and the step heading cascade Typewriters were firing in parallel,
+  // showing two blinking cursors at once during their overlap window.
+  // Gate the description's text reveal until the heading cascade finishes,
+  // so only one Typewriter is ever typing at a time.
+  //
+  // While `descriptionRevealed` is false, the description prop passed to
+  // ProjectHeader is '' — its Typewriter renders nothing and never fires.
+  // When the gate flips true, description text becomes non-empty, the
+  // Typewriter's text-change effect resets index to 0, and it types in
+  // with the standard 200ms startDelay. By that point the cascade is done,
+  // so there's no parallel cursor to compete.
+  const [descriptionRevealed, setDescriptionRevealed] = useState(false)
+  useEffect(() => {
+    const desc = actionPlan?.description
+    if (!desc) {
+      setDescriptionRevealed(false)
+      return
+    }
+    setDescriptionRevealed(false)
+    if (prefersReducedMotion) {
+      setDescriptionRevealed(true)
+      return
+    }
+    const stepCount = Math.max(1, actionPlan?.steps.length ?? 5)
+    // Last heading starts at (stepCount-1)*1500ms and types ~600ms;
+    // +200ms beat before description begins.
+    const cascadeDoneMs = (stepCount - 1) * 1500 + 800
+    const timeout = window.setTimeout(
+      () => setDescriptionRevealed(true),
+      cascadeDoneMs,
+    )
+    return () => window.clearTimeout(timeout)
+  }, [actionPlan?.description, actionPlan?.steps.length, prefersReducedMotion])
+
+  const description = descriptionRevealed ? (actionPlan?.description ?? '') : ''
 
   const statusLabel = useMemo(() => phaseStatusLabel(phase), [phase])
 
@@ -311,14 +347,24 @@ function CanvasScreenImpl({
     return empty
   }, [actionPlan, findings])
 
-  // DP1.8.D.3 — diagram slot gate. The architecture diagram shimmer should
-  // only mount AFTER the step heading cascade has finished step N, so the
-  // student sees the headings type in cleanly first and THEN the image
-  // placeholder appears as its own deliberate beat. Cascade timing:
-  //   step heading start = stepIndex * 1500ms
-  //   step length        ≈ 25 chars * 18ms ≈ 450ms typing
-  //   step N completes   ≈ (N-1) * 1500 + ~600ms after actionPlan lands
-  // Reduced motion bypasses the wait — no choreography to honour.
+  // DP1.8.D.5 — diagram slot gate. The architecture diagram shimmer mounts
+  // shortly after actionPlan lands so it's the FIRST post-Phase-A visual
+  // to appear — beating step 1's modular Phase B content shimmer (which
+  // fires when step 1's heading finishes typing, ~500ms after actionPlan
+  // lands). Without this ordering the canvas read backwards: step 1 was
+  // already streaming content while the diagram slot above it was still
+  // empty whitespace.
+  //
+  // Previous implementation (DP1.8.D.3) gated the slot behind the full
+  // heading cascade `(stepCount-1)*1500 + 1000ms = 7000ms`. That gate
+  // assumed the linear-content-streaming era of pre-DP1.7. Modular Phase B
+  // changed the reference point — per-step content shimmer is now the
+  // dominant post-cascade visual, and the diagram needs to anchor it from
+  // above before content kicks off, not after.
+  //
+  // 200ms beat (rather than 0ms) avoids a jarring pop-in flush against
+  // setActionPlan; gives the render frame a moment to settle. Reduced
+  // motion bypasses the wait entirely.
   const [diagramSlotReady, setDiagramSlotReady] = useState(false)
   useEffect(() => {
     if (!actionPlan) {
@@ -330,9 +376,7 @@ function CanvasScreenImpl({
       setDiagramSlotReady(true)
       return
     }
-    const stepCount = Math.max(1, actionPlan.steps.length)
-    const cascadeMs = (stepCount - 1) * 1500 + 1000
-    const timeout = window.setTimeout(() => setDiagramSlotReady(true), cascadeMs)
+    const timeout = window.setTimeout(() => setDiagramSlotReady(true), 200)
     return () => window.clearTimeout(timeout)
   }, [actionPlan, diagramSlotReady, prefersReducedMotion])
 

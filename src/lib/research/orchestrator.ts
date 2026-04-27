@@ -170,16 +170,25 @@ export function detectsLibrary(text: string): boolean {
  * be outdated or suboptimal. Coarse by design — DP1.5.J refinement
  * happens with real usage.
  */
+// Strict branch-candidate patterns — kept only the high-signal phrases that
+// genuinely indicate "the world moved on, you should switch this step." The
+// looser DP1.5.J patterns ("since 2025", "use X instead of Y") fired on
+// benign comparison content and produced visual noise on every step
+// (real-feedback 2026-04-27). These three remain because they almost only
+// appear in genuinely-contradictory framing.
 const BRANCH_PATTERNS: RegExp[] = [
-  /\b(?:use|uses|using|prefer|choose|pick|recommend)\s+[\w.-]+(?:\s+[\w.-]+){0,4}\s+(?:instead of|rather than|over)\s+/i,
-  /\bmost\s+(?:\w+\s+){0,3}(?:tutorials?|projects?|developers?|teams?|users?|apps?|services?)\s+(?:now|today|in 2026|currently)\b/i,
-  /\b(?:has been |is |was )?(?:replaced|superseded|deprecated|sunset)\b/i,
-  /\b(?:migrated?|migration)\s+(?:from|to|away from)\b/i,
-  /\b(?:since|as of)\s+(?:202[5-9]|version)\b/i,
+  /\b(?:has been |is |was )?(?:replaced|superseded|deprecated|sunset)\s+by\b/i,
+  /\bmost\s+(?:\w+\s+){0,3}(?:tutorials?|projects?|developers?|teams?)\s+(?:now|today|in 2026)\s+(?:use|prefer|choose)\b/i,
+  /\b(?:migrated?|moved|switching)\s+(?:from|away from)\s+[\w.-]+\s+(?:to|toward)\s+[\w.-]+/i,
 ]
 
 export function detectBranchCandidate(finding: ResearchFinding): boolean {
   if (finding.status !== 'ready' || finding.snippets.length === 0) return false
+  // Source gate: training-cutoff Exa snippets often paraphrase generic
+  // comparison content; fresh Firecrawl + Perplexity findings are the only
+  // sources where a "switch this step" suggestion is actionable. Context7
+  // is library-doc lookup, also acceptable.
+  if (finding.source === 'exa') return false
   return finding.snippets.some((s) =>
     BRANCH_PATTERNS.some((re) => re.test(s.content)),
   )

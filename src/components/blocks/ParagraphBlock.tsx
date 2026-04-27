@@ -16,7 +16,7 @@ import { memo, useState } from 'react'
 import type { ParagraphBlock as ParagraphBlockType } from '@/lib/state'
 import { TextSpans } from './TextSpanRenderer'
 import { Typewriter } from '@/components/Typewriter'
-import { flattenSpansToText } from './typewriterText'
+import { BLOCK_TYPEWRITER_SPEED_MS, flattenSpansToText } from './typewriterText'
 
 export interface ParagraphBlockViewProps {
   block: ParagraphBlockType
@@ -32,6 +32,7 @@ function ParagraphBlockViewImpl({ block, typewriter }: ParagraphBlockViewProps) 
         <Typewriter
           as="span"
           text={flattenSpansToText(block.content)}
+          speedMs={BLOCK_TYPEWRITER_SPEED_MS}
           onComplete={() => {
             setTyped(true)
             typewriter.onComplete()

@@ -48,6 +48,15 @@ export interface StepPillProps {
    * no rationale is available; the chip renders without the explanation.
    */
   rationale?: string
+  /**
+   * DP1.8.A.2 — "Talk it through →" escape hatch. Fires when the student
+   * taps the link below the options row. The handler in App opens the chat
+   * tray with a seeded system message that names the decision so the
+   * assistant can walk through trade-offs and (optionally) suggest a fourth
+   * option. Optional: when undefined, the link is suppressed (e.g. legacy
+   * test mounts that don't wire chat).
+   */
+  onAskAboutPill?: (decisionType: string) => void
 }
 
 function StepPillImpl({
@@ -59,6 +68,7 @@ function StepPillImpl({
   onReopen,
   isOpen,
   rationale,
+  onAskAboutPill,
 }: StepPillProps) {
   const { decisionType, selected, aiPicked } = row
 
@@ -80,6 +90,10 @@ function StepPillImpl({
   const handleReopen = useCallback(() => {
     onReopen(decisionType)
   }, [decisionType, onReopen])
+
+  const handleAsk = useCallback(() => {
+    onAskAboutPill?.(decisionType)
+  }, [decisionType, onAskAboutPill])
 
   return (
     <motion.div
@@ -131,6 +145,21 @@ function StepPillImpl({
                 I don’t know, you tell me
               </button>
             </div>
+            {/* DP1.8.A.2 — "Talk it through →" escape hatch. Tertiary
+                affordance below the option row that pre-seeds the chat tray
+                with this decision's context. Suppressed when the parent
+                doesn't wire onAskAboutPill so legacy test mounts still
+                render cleanly. */}
+            {onAskAboutPill ? (
+              <button
+                type="button"
+                onClick={handleAsk}
+                className="font-body self-start text-xs uppercase tracking-[0.12em] text-brand-400 hover:text-leather focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-200 rounded-sm"
+                aria-label={`Talk through ${question}`}
+              >
+                Talk it through →
+              </button>
+            ) : null}
           </motion.div>
         ) : (
           <motion.button

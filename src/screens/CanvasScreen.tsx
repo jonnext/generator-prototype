@@ -21,11 +21,12 @@
 // I7 replaces the docked chat button with the full ChatTray.
 
 import { motion } from 'motion/react'
-import { Fragment, memo, useCallback, useLayoutEffect, useMemo, useTransition } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useState, useTransition } from 'react'
 import { ArchitectureDiagram } from '@/components/canvas/ArchitectureDiagram'
 import { ContinueStepCTA } from '@/components/canvas/ContinueStepCTA'
 import { ProjectHeader } from '@/components/canvas/ProjectHeader'
 import { MetadataRow } from '@/components/canvas/MetadataRow'
+import { PlaceholderStepRow } from '@/components/canvas/PlaceholderStepRow'
 import { ResearchPulse } from '@/components/canvas/ResearchPulse'
 import { StepCard } from '@/components/canvas/StepCard'
 import {
@@ -96,6 +97,10 @@ export interface CanvasScreenProps {
    *  with the target stepIndex. DP1.7.F's Continue CTA will share the same
    *  callback, keeping both surfaces in sync. */
   onTriggerStep?: (stepIndex: number) => void
+  /** DP1.8.A.2 — pill escape hatch. Forwarded to each StepCard / StepPill so
+   *  the "Talk it through →" link can hand the decision off to App, which
+   *  opens the chat tray with a seeded system message. */
+  onAskAboutPill?: (stepId: string, decisionType: string) => void
 }
 
 // ----------------------------------------------------------------------------
@@ -121,11 +126,45 @@ function phaseStatusLabel(phase: Phase): string {
 // would churn their memo regardless of whether anything actually changed.
 const EMPTY_FINDINGS: ResearchFinding[] = []
 
+// DP1.8.D.1 — derive the canvas title from the user's prompt directly.
+// The prompt is the canonical statement of intent; Phase A's eventual
+// `actionPlan.title` is just a paraphrase. Using the prompt and never
+// swapping means the Typewriter runs exactly once — no retype when
+// actionPlan lands or when Phase D mutates the plan reference.
+function deriveTitleFromIntent(intent: string | undefined): string {
+  if (!intent) return ''
+  const trimmed = intent.trim()
+  if (trimmed.length === 0) return ''
+  // Strip a trailing period (titles don't take one) and capitalize the
+  // first character so prompts like "a Claude app…" read as proper titles.
+  const noTrailingDot = trimmed.replace(/\.+$/, '')
+  return noTrailingDot.charAt(0).toUpperCase() + noTrailingDot.slice(1)
+}
+
 // DP1.7.F — stable no-op fallback for ContinueStepCTA when onTriggerStep
 // is unset. Module-level so the CTA's memo stays intact across renders.
 const noopTriggerStep = (_stepIndex: number) => {
   void _stepIndex
 }
+
+// DP1.8.D.4 — sequenced materializing timeline. Each beat lands after the
+// prior animation completes so the canvas reads as "the agent is building
+// the outline" rather than "everything appears at once". Per Jon's brief
+// (2026-04-27): the architecture diagram should land mathematically after
+// step 5 finishes typing, so the buffer time provided by the cascade fills
+// the diagram's 20-25s generation window.
+//
+// Order:  header types  →  metadata fades  →  step rows cascade  →  diagram
+//
+// HEADER_TITLE_SPEED_MS must match ProjectHeader.tsx:21 — it's the source
+// of truth for how long the title typewriter takes per character. If that
+// number changes, this one must change too.
+const HEADER_TITLE_SPEED_MS = 60
+const HEADER_TO_METADATA_BEAT_MS = 350
+const METADATA_FADE_DURATION_MS = 350
+const METADATA_TO_STEPS_BEAT_MS = 250
+const STEP_CASCADE_INTERVAL_MS = 1500
+const STEP_ROW_FADE_DURATION_MS = 350
 
 // ----------------------------------------------------------------------------
 // CanvasScreen
@@ -153,6 +192,7 @@ function CanvasScreenImpl({
   onBranchApply,
   onBranchDismiss,
   onTriggerStep,
+  onAskAboutPill,
 }: CanvasScreenProps) {
   // Phase transitions are non-urgent: wrap in startTransition so input
   // events stay responsive during heavy reflow.
@@ -195,19 +235,45 @@ function CanvasScreenImpl({
     [setPersonalPill],
   )
 
-  // Title + description are derived during render (no useState, no useEffect
-  // storing copies). Source of truth is actionPlan when it exists, otherwise
-  // the intent string that triggered materialization.
-  const title = actionPlan?.title ?? intent ?? 'Untitled project'
-  const description =
-    actionPlan?.description ??
-    "Shaping an outline now. You will be able to swap steps, choose tools, and regenerate anything before we build it."
+  // Title + description.
+  //
+  // DP1.8.D.1 — the title is derived from the user's prompt and held stable
+  // for the life of the project. Phase A produces its own `actionPlan.title`
+  // (a paraphrase) but we ignore it at the header level — using one canonical
+  // string means the Typewriter types it exactly once and never re-fires
+  // when actionPlan mutates (Phase B Pass 2, Phase D ready, sculpt regens).
+  // The description starts empty until Phase A's `actionPlan.description`
+  // lands; the empty→real transition is a single first-reveal because
+  // text was '' at mount, so index was already 0 — no setIndex(0) reset.
+  const title = useMemo(() => deriveTitleFromIntent(intent), [intent])
+  const description = actionPlan?.description ?? ''
 
   const statusLabel = useMemo(() => phaseStatusLabel(phase), [phase])
 
-  // Skeleton step cards during materializing — 5 placeholders reveal with
-  // 60ms stagger for the Koch orchestrated feel before the real plan lands.
+  // Skeleton step cards during materializing — 5 placeholders reveal in a
+  // delayed cascade after header + metadata land (DP1.8.D.4).
   const skeletonStepIds = useMemo(() => ['s1', 's2', 's3', 's4', 's5'], [])
+
+  // DP1.8.D.4 — derived timeline anchors for the "agent building the outline"
+  // sequence. Header-first (types from t=0), metadata-second (fades in once
+  // title finishes), step-cascade-third (placeholder rows enter one at a
+  // time as the agent "drafts" each one). Reduced motion collapses every
+  // delay to 0 so the canvas snaps to its final state with no choreography.
+  const titleDurationMs = useMemo(
+    () => (prefersReducedMotion ? 0 : title.length * HEADER_TITLE_SPEED_MS),
+    [title, prefersReducedMotion],
+  )
+  const metadataStartMs = useMemo(
+    () => (prefersReducedMotion ? 0 : titleDurationMs + HEADER_TO_METADATA_BEAT_MS),
+    [titleDurationMs, prefersReducedMotion],
+  )
+  const stepsCascadeStartMs = useMemo(
+    () =>
+      prefersReducedMotion
+        ? 0
+        : metadataStartMs + METADATA_FADE_DURATION_MS + METADATA_TO_STEPS_BEAT_MS,
+    [metadataStartMs, prefersReducedMotion],
+  )
 
   // ---- StepCard handlers ---------------------------------------------------
   // Each handler is a thin wrapper over the engine setters so CanvasScreen
@@ -244,6 +310,31 @@ function CanvasScreenImpl({
     }
     return empty
   }, [actionPlan, findings])
+
+  // DP1.8.D.3 — diagram slot gate. The architecture diagram shimmer should
+  // only mount AFTER the step heading cascade has finished step N, so the
+  // student sees the headings type in cleanly first and THEN the image
+  // placeholder appears as its own deliberate beat. Cascade timing:
+  //   step heading start = stepIndex * 1500ms
+  //   step length        ≈ 25 chars * 18ms ≈ 450ms typing
+  //   step N completes   ≈ (N-1) * 1500 + ~600ms after actionPlan lands
+  // Reduced motion bypasses the wait — no choreography to honour.
+  const [diagramSlotReady, setDiagramSlotReady] = useState(false)
+  useEffect(() => {
+    if (!actionPlan) {
+      setDiagramSlotReady(false)
+      return
+    }
+    if (diagramSlotReady) return
+    if (prefersReducedMotion) {
+      setDiagramSlotReady(true)
+      return
+    }
+    const stepCount = Math.max(1, actionPlan.steps.length)
+    const cascadeMs = (stepCount - 1) * 1500 + 1000
+    const timeout = window.setTimeout(() => setDiagramSlotReady(true), cascadeMs)
+    return () => window.clearTimeout(timeout)
+  }, [actionPlan, diagramSlotReady, prefersReducedMotion])
 
   return (
     <main className="relative min-h-dvh w-full bg-paper text-leather">
@@ -290,20 +381,40 @@ function CanvasScreenImpl({
 
         {/* DP1.6 — Phase D architecture diagram. Renders shimmer while
             Gemini Pro draws (~20-25s), crossfades to image when ready,
-            renders nothing when status is idle/failed (graceful). */}
-        <ArchitectureDiagram
-          status={actionPlan?.diagramStatus}
-          diagramUrl={actionPlan?.diagramUrl}
-          title={actionPlan?.title ?? title}
-          stepHeadings={actionPlan?.steps.map((s) => s.heading) ?? []}
-        />
+            renders nothing when status is idle/failed (graceful).
+            DP1.8.D.3 — gated behind `diagramSlotReady` so the shimmer
+            doesn't compete with the heading cascade for attention; the
+            slot only mounts once step N's title has finished typing. */}
+        {diagramSlotReady ? (
+          <ArchitectureDiagram
+            status={actionPlan?.diagramStatus}
+            diagramUrl={actionPlan?.diagramUrl}
+            title={actionPlan?.title ?? title}
+            stepHeadings={actionPlan?.steps.map((s) => s.heading) ?? []}
+          />
+        ) : null}
 
-        {/* MetadataRow — persistent medium-granularity pills */}
-        <MetadataRow
-          personal={personal}
-          origins={personalOrigins}
-          onChange={handlePersonalChange}
-        />
+        {/* MetadataRow — persistent medium-granularity pills.
+            DP1.8.D.4 — wrapped in a delayed motion.div so the row fades in
+            ONLY after the header title finishes typing. Without this gate
+            the row was visible from t=0 alongside a typing header, which
+            collided with the "agent building the outline" sequence Jon
+            sketched in the timeline brief. */}
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{
+            delay: metadataStartMs / 1000,
+            duration: METADATA_FADE_DURATION_MS / 1000,
+            ease: 'easeOut',
+          }}
+        >
+          <MetadataRow
+            personal={personal}
+            origins={personalOrigins}
+            onChange={handlePersonalChange}
+          />
+        </motion.div>
 
         {/* Steps region — skeleton in materializing, real plan in I6+ */}
         <motion.section
@@ -345,6 +456,7 @@ function CanvasScreenImpl({
                         onBranchDismiss={onBranchDismiss}
                         headingStartDelay={prefersReducedMotion ? 0 : index * 1500}
                         onTriggerStep={onTriggerStep}
+                        onAskAboutPill={onAskAboutPill}
                       />
                     </motion.div>
                     {showContinueCTA && nextStep ? (
@@ -358,22 +470,36 @@ function CanvasScreenImpl({
                 )
               })
             : skeletonStepIds.map((id, index) => {
-                // Each placeholder shows its step number + a pulsing loader
-                // bar so the student can feel the 5-step shape of the project
-                // before Claude's skeleton call lands. Matches the J3-0 Paper
-                // frame "Round 5 - ideal flow" post-generate target.
-                const stepNumber = (index + 1).toString().padStart(2, '0')
+                // DP1.8.D.2 — typewriter placeholder rows replace the prior
+                // pulsing bars. DP1.8.D.4 — each row's outer fade-in AND its
+                // inner Typewriter share a single per-row delay
+                // (`stepsCascadeStartMs + index * 1500ms`) so the row visually
+                // appears AS the agent starts drafting it, not before.
+                //
+                // Keys are prefixed `placeholder-${id}` (vs the real step's
+                // `id` which is just `s1`-`s5`) so React fully unmounts the
+                // delayed-fade placeholder wrappers when actionPlan lands and
+                // the ternary branch flips to real StepCards. Without this,
+                // a real StepCard could mount inside a placeholder wrapper
+                // that was still waiting on its delayed fade-in and stay
+                // invisible.
+                const rowDelaySec =
+                  (stepsCascadeStartMs + index * STEP_CASCADE_INTERVAL_MS) / 1000
                 return (
                   <motion.div
-                    key={id}
-                    variants={stepCardVariants}
-                    className="flex w-full items-center gap-4 rounded-2xl border border-brand-50 bg-warm-white px-4 py-5 shadow-[var(--shadow-card)]"
-                    aria-hidden
+                    key={`placeholder-${id}`}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{
+                      delay: rowDelaySec,
+                      duration: STEP_ROW_FADE_DURATION_MS / 1000,
+                      ease: 'easeOut',
+                    }}
                   >
-                    <span className="font-body text-xs text-brand-400">
-                      {stepNumber}
-                    </span>
-                    <div className="h-2.5 flex-1 rounded-full bg-brand-50/70 animate-pulse" />
+                    <PlaceholderStepRow
+                      stepIndex={index}
+                      cascadeStartMs={stepsCascadeStartMs}
+                    />
                   </motion.div>
                 )
               })}

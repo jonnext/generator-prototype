@@ -74,6 +74,35 @@ export interface ChatTrayProps {
   /** Submit callback. `isInterrupt` is true when the message was sent
       while isGenerating was true, so the parent knows to abort + merge. */
   onSend: (text: string, isInterrupt: boolean) => void
+  /**
+   * DP1.8.A.1 — transient context-seed shown above the assistant/user
+   * thread. Set by the App when the tray opens via the "Talk it through →"
+   * link on a StepPill row; cleared on close so seeds don't accumulate
+   * across opens. Renders as a neutral system-style bubble (not user, not
+   * assistant) so the student reads it as "context the agent has been
+   * given." Does NOT persist into the chat.messages array — the App is
+   * responsible for forwarding it into the actual Claude call's context.
+   */
+  seedMessage?: string
+  /**
+   * DP1.8.A.3 — pill the seed message is scoped to. Required for the
+   * inline "Add as option" button to know which stepId + decisionType to
+   * extend when an assistant message proposes a fourth option (the regex
+   * scan happens per-message inside this component). Cleared when the
+   * tray closes alongside seedMessage.
+   */
+  pillContext?: { stepId: string; decisionType: string }
+  /**
+   * DP1.8.A.3 — handler for the inline "Add as option" button. Called
+   * with the extracted option name when the student taps the button under
+   * an assistant message that proposed a fourth option. The App handler
+   * dispatches EXTEND_PILL_OPTIONS and closes the tray.
+   */
+  onAddPillOption?: (
+    stepId: string,
+    decisionType: string,
+    newOption: string,
+  ) => void
 }
 
 // ----------------------------------------------------------------------------
@@ -86,10 +115,21 @@ function ChatTrayImpl({
   isGenerating,
   onClose,
   onSend,
+  seedMessage,
+  pillContext,
+  onAddPillOption,
 }: ChatTrayProps) {
   // Draft is local to the tray — adding it to the engine would re-render
   // every chat subscriber on every keystroke (rerender-split-combined-hooks).
   const [draft, setDraft] = useState('')
+
+  // DP1.8.A.3 — track which assistant messages have already had their
+  // proposed-option added so the inline button collapses to a confirmation
+  // chip on subsequent renders. Local to the tray — engine state would
+  // overshare; this only matters for the active chat session.
+  const [addedMessageIds, setAddedMessageIds] = useState<Set<string>>(
+    () => new Set(),
+  )
 
   // Transient focus ref.
   const inputRef = useRef<HTMLInputElement>(null)
@@ -125,6 +165,25 @@ function ChatTrayImpl({
     [onClose],
   )
 
+  // DP1.8.A.3 — inline "Add as option" handler. Records the message id as
+  // added (so the button collapses) before delegating to the App handler,
+  // which dispatches EXTEND_PILL_OPTIONS and closes the tray. Marking
+  // before delegation keeps the optimistic UI honest even if the parent
+  // re-renders the tray in the same tick.
+  const handleAddOption = useCallback(
+    (messageId: string, newOption: string) => {
+      if (!pillContext || !onAddPillOption) return
+      setAddedMessageIds((prev) => {
+        if (prev.has(messageId)) return prev
+        const next = new Set(prev)
+        next.add(messageId)
+        return next
+      })
+      onAddPillOption(pillContext.stepId, pillContext.decisionType, newOption)
+    },
+    [pillContext, onAddPillOption],
+  )
+
   // Pulse class — preserved wiring. Only apply while generating AND not
   // visibly expanded (the expanded list already draws focus; double-
   // signalling looks noisy). Note: `isOpen` is now always true when this
@@ -158,7 +217,13 @@ function ChatTrayImpl({
         </button>
       </div>
 
-      <MessageList messages={messages} />
+      <MessageList
+        messages={messages}
+        seedMessage={seedMessage}
+        addedMessageIds={addedMessageIds}
+        canAddOption={Boolean(pillContext && onAddPillOption)}
+        onAddOption={handleAddOption}
+      />
 
       {/* Composer form — layoutId="chatInput" carries the shared-element
           morph from Discovery's ToolbarInput inner composer. When the
@@ -209,12 +274,31 @@ export const ChatTray = memo(ChatTrayImpl)
 // Memoized so a chat pulse tick doesn't re-render the whole transcript.
 // ----------------------------------------------------------------------------
 
+// DP1.8.A.3 — fragile-by-design detection of an assistant message that
+// proposes a fourth pill option. The seed message instructs the assistant
+// to end with this exact phrase, so the regex looks for the **bolded name**
+// envelope. Apostrophe class covers ASCII ' and curly ’ since Claude
+// occasionally returns smart-quoted output. Recall is good enough for the
+// prototype; we'll refine the prompt + regex if surfaces miss in practice.
+const ADD_OPTION_REGEX =
+  /I['’]?d suggest adding \*\*(.+?)\*\* as a fourth option/i
+
 interface MessageListProps {
   messages: ChatMessage[]
+  seedMessage?: string
+  addedMessageIds: Set<string>
+  canAddOption: boolean
+  onAddOption: (messageId: string, newOption: string) => void
 }
 
-function MessageListImpl({ messages }: MessageListProps) {
-  if (messages.length === 0) {
+function MessageListImpl({
+  messages,
+  seedMessage,
+  addedMessageIds,
+  canAddOption,
+  onAddOption,
+}: MessageListProps) {
+  if (messages.length === 0 && !seedMessage) {
     return (
       <div className="flex max-h-[50vh] flex-col items-start gap-2 overflow-y-auto px-4 py-2">
         <p className="font-body text-xs text-brand-400">
@@ -226,8 +310,15 @@ function MessageListImpl({ messages }: MessageListProps) {
 
   return (
     <div className="flex max-h-[50vh] flex-col gap-3 overflow-y-auto px-4 py-2">
+      {seedMessage ? <SeedBubble content={seedMessage} /> : null}
       {messages.map((message) => (
-        <MessageBubble key={message.id} message={message} />
+        <MessageBubble
+          key={message.id}
+          message={message}
+          isAdded={addedMessageIds.has(message.id)}
+          canAddOption={canAddOption}
+          onAddOption={onAddOption}
+        />
       ))}
     </div>
   )
@@ -236,15 +327,63 @@ function MessageListImpl({ messages }: MessageListProps) {
 const MessageList = memo(MessageListImpl)
 
 // ----------------------------------------------------------------------------
+// SeedBubble — DP1.8.A.1 transient context the assistant has been given.
+// Visually distinct from user/assistant bubbles: muted, full-width, dashed
+// border so it reads as system context rather than dialogue.
+// ----------------------------------------------------------------------------
+
+interface SeedBubbleProps {
+  content: string
+}
+
+function SeedBubbleImpl({ content }: SeedBubbleProps) {
+  return (
+    <div className="flex flex-col items-stretch gap-1">
+      <span className="font-body text-[10px] uppercase tracking-[0.1em] text-brand-300">
+        Context
+      </span>
+      <div className="font-body w-full rounded-2xl border border-dashed border-brand-100 bg-warm-white/60 px-3 py-2 text-xs leading-relaxed text-brand-500">
+        {content}
+      </div>
+    </div>
+  )
+}
+
+const SeedBubble = memo(SeedBubbleImpl)
+
+// ----------------------------------------------------------------------------
 // MessageBubble — one chat message. Different alignment for user/assistant.
+// DP1.8.A.3 — assistant messages run through ADD_OPTION_REGEX to surface
+// an inline "Add as option" button when the model proposes a fourth pill
+// value. The button collapses to a checkmark chip after the option is
+// added so the affordance reads as committed, not repeatable.
 // ----------------------------------------------------------------------------
 
 interface MessageBubbleProps {
   message: ChatMessage
+  isAdded: boolean
+  canAddOption: boolean
+  onAddOption: (messageId: string, newOption: string) => void
 }
 
-function MessageBubbleImpl({ message }: MessageBubbleProps) {
+function MessageBubbleImpl({
+  message,
+  isAdded,
+  canAddOption,
+  onAddOption,
+}: MessageBubbleProps) {
   const isUser = message.role === 'user'
+
+  // Detection runs only on assistant messages and only when the parent has
+  // wired pill context — otherwise the button has nothing to dispatch.
+  const proposedOption =
+    !isUser && canAddOption ? extractProposedOption(message.content) : null
+
+  const handleAdd = useCallback(() => {
+    if (!proposedOption) return
+    onAddOption(message.id, proposedOption)
+  }, [message.id, onAddOption, proposedOption])
+
   return (
     <div
       className={
@@ -265,8 +404,36 @@ function MessageBubbleImpl({ message }: MessageBubbleProps) {
       >
         {message.content}
       </div>
+      {proposedOption ? (
+        isAdded ? (
+          <span className="font-body inline-flex items-center gap-1 rounded-full border border-brand-50 bg-warm-white px-3 py-1 text-xs text-brand-500">
+            <span aria-hidden>✓</span>
+            <span>Added “{proposedOption}”</span>
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={handleAdd}
+            className="font-body inline-flex items-center gap-1 rounded-full border border-brand-50 bg-paper px-3 py-1 text-xs text-leather hover:border-brand-300 hover:bg-warm-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-200"
+          >
+            <span aria-hidden>+</span>
+            <span>Add “{proposedOption}” as an option</span>
+          </button>
+        )
+      ) : null}
     </div>
   )
 }
 
 const MessageBubble = memo(MessageBubbleImpl)
+
+// DP1.8.A.3 — extract the proposed option name from an assistant message.
+// Returns null when the message doesn't match the expected envelope, so
+// callers can render conditionally without an extra null check on the
+// regex result. Lives at module level so the regex compiles once.
+function extractProposedOption(content: string): string | null {
+  const match = ADD_OPTION_REGEX.exec(content)
+  if (!match) return null
+  const captured = match[1]?.trim()
+  return captured && captured.length > 0 ? captured : null
+}

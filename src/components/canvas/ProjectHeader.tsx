@@ -18,7 +18,7 @@ import { SketchStatusPill } from '@/components/canvas/SketchStatusPill'
 import { Typewriter } from '@/components/Typewriter'
 import type { Phase } from '@/lib/state'
 
-const TYPEWRITER_SPEED_MS = 30
+const TYPEWRITER_SPEED_MS = 60
 const DESCRIPTION_OVERLAP_MS = 200
 
 export interface ProjectHeaderProps {
@@ -57,11 +57,16 @@ function ProjectHeaderImpl({
         className="type-display-xl text-leather"
       />
       <p className="font-heading max-w-prose text-brand-500" style={{ fontSize: 'var(--text-reading)', lineHeight: 'var(--leading-reading)' }}>
-        {/* startDelay = title typing duration + small overlap so description begins as title finishes */}
+        {/* DP1.8.D.4 — description startDelay is just a beat after description
+            text first appears. The previous calc (`title.length * speed + 200`)
+            assumed title and description both arrived at canvas mount; now
+            title comes from intent (mount) and description arrives later when
+            Phase A returns, by which point the title is long-finished. A
+            small constant beat is the correct cue. */}
         <Typewriter
           text={description}
           speedMs={TYPEWRITER_SPEED_MS}
-          startDelay={title.length * TYPEWRITER_SPEED_MS + DESCRIPTION_OVERLAP_MS}
+          startDelay={DESCRIPTION_OVERLAP_MS}
         />
       </p>
     </motion.header>

@@ -1,47 +1,41 @@
 // Discovery screen — the Generator V2 entry point.
 //
-// 2026-04-25 (round 4): reverted to the original centred single-column
-// shape per Paper frame `31R-0` "Explore Starting Point". The header
-// stack (hero, example pills, eyebrow, filter row) is centred above a
-// uniform tile grid. An oversized "globe" mask is layered on the grid
-// via a CSS radial-gradient at `circle at 50% 110%` — the centre sits
-// just below the viewport (behind the floating Generate input), so the
-// visible arc bows upward across the lower-mid grid. Tiles inside the
-// arc fade toward the paper background; tiles in the upper corners
-// stay at full opacity. Pure CSS, static, no shader element.
+// 2026-04-27 (round 7): Spotify-style rows extended into a richer
+// library feel per Jon's review:
+//   • Side padding bumped (px-10 → md:px-16 → lg:px-20) so first/last
+//     tiles aren't flush against the viewport edge.
+//   • Project rows render in dark mode (cards switch to a dark surface)
+//     so they fit the inky browse panel rather than punching white holes.
+//   • Multiple themed rows now: Featured Roadmaps, Top Roadmaps,
+//     Specialty Tracks, Tool Deep-Dives, Build with Claude (2-row stack),
+//     Build on AWS (2-row stack) — feels like a real catalogue.
+//   • Browse panel extends to fill the remaining viewport height; the
+//     paper ground never reappears below it as you scroll, so the dark
+//     "library platform" stays cohesive past every row.
 //
-// State lift remains: input value lives here so example pills and tile
-// clicks can populate it via setInputValue. Submission still routes
-// through onSearchCardSubmit → App.handleGenerate (no change to the
-// generation pipeline).
+// Hero, example pills, wordmark, and floating Generate input unchanged.
+// State lift unchanged: input value lives here so example pills and
+// tile clicks can populate it. Submission still routes through
+// onSearchCardSubmit → App.handleGenerate.
 
-import { useCallback, useState } from 'react'
-import { CategoryFilterRow, type ProjectFilter } from '@/components/discovery/CategoryFilterRow'
-import { EyebrowLabel } from '@/components/discovery/EyebrowLabel'
+import { useCallback, useMemo, useState } from 'react'
+import { CourseTile } from '@/components/discovery/CourseTile'
 import { ExamplePromptPills } from '@/components/discovery/ExamplePromptPills'
+import { Footer } from '@/components/discovery/Footer'
 import { GenerateProjectInput } from '@/components/discovery/GenerateProjectInput'
 import { HeroHeadline } from '@/components/discovery/HeroHeadline'
-import { ProjectGrid } from '@/components/discovery/ProjectGrid'
+import { ProjectIconCard } from '@/components/discovery/ProjectIconCard'
+import { SpotifyRow } from '@/components/discovery/SpotifyRow'
 import { Wordmark } from '@/components/discovery/Wordmark'
-import type { NextworkProject } from '@/data/nextworkProjects'
-
-// Globe mask — defined once at module scope so the string identity is
-// stable across renders.
-//
-// Geometry: the gradient centre sits at `50% 110%` (just past the
-// wrapper's bottom edge), so the visible portion of the radial gradient
-// is the upper arc of a very large circle. Alpha controls fade vs full:
-//   • 0%–35% radius → fully transparent (tiles invisible — the planet's
-//                     "interior" that we don't render)
-//   • 35%–60% radius → transition zone (the visible arc cutting through
-//                     the grid — this is what reads as the planet edge)
-//   • 60%+ radius → fully opaque (tiles at full opacity in the corners)
-//
-// Both mask-image and -webkit-mask-image are set so Safari renders
-// without a vendor flip. The hard alpha contrast makes the arc visible
-// against painted-art tiles where a softer fade washes out.
-const GLOBE_MASK =
-  'radial-gradient(circle at 50% 110%, transparent 0%, transparent 35%, rgba(0,0,0,1) 60%)'
+import { FEATURED_ROADMAP_SLUGS } from '@/data/nextworkSeriesFeatured'
+import {
+  NEXTWORK_PROJECTS,
+  type NextworkProject,
+} from '@/data/nextworkProjects'
+import {
+  projectsByConcept,
+  type IndividualProject,
+} from '@/data/individualProjects'
 
 export interface DiscoveryScreenProps {
   /**
@@ -53,58 +47,190 @@ export interface DiscoveryScreenProps {
 
 export function DiscoveryScreen({ onSearchCardSubmit }: DiscoveryScreenProps) {
   const [inputValue, setInputValue] = useState('')
-  const [activeFilter, setActiveFilter] = useState<ProjectFilter>('All')
 
   const handlePickPrompt = useCallback((prompt: string) => {
     setInputValue(prompt)
   }, [])
 
-  const handleSelectProject = useCallback((project: NextworkProject) => {
+  const handlePickSeries = useCallback((series: NextworkProject) => {
+    setInputValue(series.title)
+  }, [])
+
+  const handlePickProject = useCallback((project: IndividualProject) => {
     setInputValue(project.title)
   }, [])
 
+  // Featured Roadmaps row — curated slug list resolved to course records.
+  const featuredRoadmaps = useMemo(() => {
+    const bySlug = new Map(NEXTWORK_PROJECTS.map((p) => [p.id, p]))
+    return FEATURED_ROADMAP_SLUGS
+      .map((slug) => bySlug.get(slug))
+      .filter((s): s is NextworkProject => Boolean(s))
+  }, [])
+
+  // Top Roadmaps — every roadmap series NOT already in Featured Roadmaps,
+  // so the rows complement rather than duplicate. Memoised against
+  // FEATURED_ROADMAP_SLUGS for stable identity.
+  const moreRoadmaps = useMemo(() => {
+    const featuredSet = new Set<string>(FEATURED_ROADMAP_SLUGS)
+    return NEXTWORK_PROJECTS.filter(
+      (p) => p.track === 'Roadmaps' && !featuredSet.has(p.id),
+    )
+  }, [])
+
+  const specialtyTracks = useMemo(
+    () => NEXTWORK_PROJECTS.filter((p) => p.track === 'Specialty'),
+    [],
+  )
+
+  const toolDeepDives = useMemo(
+    () => NEXTWORK_PROJECTS.filter((p) => p.track === 'Tools'),
+    [],
+  )
+
+  const claudeProjects = useMemo(() => projectsByConcept('Claude'), [])
+
+  // Build on AWS — projects whose concepts include "AWS". Excludes the
+  // Claude-overlap so a project doesn't appear in both project rows.
+  const awsProjects = useMemo(() => {
+    const claudeIds = new Set(claudeProjects.map((p) => p.id))
+    return projectsByConcept('AWS').filter((p) => !claudeIds.has(p.id))
+  }, [claudeProjects])
+
   return (
-    <main className="relative min-h-dvh w-full overflow-hidden bg-paper text-leather">
+    <main className="relative flex min-h-dvh w-full flex-col overflow-x-hidden bg-paper text-leather">
       {/* Wordmark fixed top-left. z-40 keeps it above the page-flow
           content but below the floating Generate input (z-50). */}
       <div className="pointer-events-none fixed left-7 top-7 z-40">
         <Wordmark width={117} className="text-leather" />
       </div>
 
-      {/* Page-flow content. The header stack is constrained to a
-          readable column width; the project grid is full viewport
-          width so the globe mask fills the whole screen as a single
-          celestial body rather than a contained widget. */}
-      <div className="flex w-full flex-col items-center gap-10 pt-24 pb-48">
-        {/* Centred header column */}
-        <div className="flex w-full max-w-[1100px] flex-col items-center gap-8 px-8">
+      {/* Hero zone — paper ground, hero + example pills.
+          Top padding (132px) and inter-element gap (32px) ported verbatim
+          from Paper artboard 4LA-0 so the hero sits where Jon designed it. */}
+      <div className="flex w-full flex-col items-center pt-[132px]">
+        <div className="flex w-full max-w-[1100px] flex-col items-center gap-8 px-10">
           <HeroHeadline />
           <ExamplePromptPills onPick={handlePickPrompt} />
         </div>
-
-        <div className="flex flex-col items-center gap-3.5 px-8">
-          <EyebrowLabel />
-          <CategoryFilterRow active={activeFilter} onChange={setActiveFilter} />
-        </div>
-
-        {/* Globe mask wrapper — full-width. The radial-gradient origin
-            at `50% 110%` puts the implicit planet centre 10% past this
-            wrapper's bottom edge (visually right behind the floating
-            Generate input). Tiles within ~35% of that centre are
-            clipped out; tiles in the upper corners stay full opacity.
-            Inner padding gives the tiles breathing room from the
-            viewport edges so the corners read as a calm border, not
-            as bleeding off the page. */}
-        <div
-          className="w-full px-6"
-          style={{
-            WebkitMaskImage: GLOBE_MASK,
-            maskImage: GLOBE_MASK,
-          }}
-        >
-          <ProjectGrid filter={activeFilter} onSelectProject={handleSelectProject} />
-        </div>
       </div>
+
+      {/* Browse panel — dark inky leather tray rising up with the
+          asymmetric 112/80 top corners (Paper artboard 4LA-0:
+          borderTopLeftRadius 112px, borderTopRightRadius 80px). The
+          asymmetry creates the gentle arch you see at the seam between
+          the paper hero and the dark catalogue ground. The 60px paper
+          gutter above (mt-[60px]) matches the Eyebrow frame's
+          paddingTop in the design. `flex-1` makes the panel consume the
+          rest of the viewport so paper bg never shows below as the user
+          scrolls. Bottom padding leaves room for the floating Generate
+          input without the rows disappearing under it. */}
+      <section
+        aria-label="Browse NextWork projects"
+        className="mt-[60px] flex w-full flex-1 flex-col gap-12 rounded-tl-[112px] rounded-tr-[80px] bg-[#1A1918] pb-24 pt-14"
+      >
+        <h2 className="text-center font-heading text-[18px]/[1.4] font-medium text-white">
+          Or browse NextWork projects
+        </h2>
+
+        <div className="flex w-full flex-col gap-12">
+          <SpotifyRow
+            tone="dark"
+            title="Featured Roadmaps"
+            subtitle="Hand-picked paths to start with"
+          >
+            {featuredRoadmaps.map((series) => (
+              <CourseTile
+                key={series.id}
+                series={series}
+                onSelect={handlePickSeries}
+              />
+            ))}
+          </SpotifyRow>
+
+          <SpotifyRow
+            tone="dark"
+            title="Top Roadmaps"
+            subtitle="More guided journeys across the catalogue"
+          >
+            {moreRoadmaps.map((series) => (
+              <CourseTile
+                key={series.id}
+                series={series}
+                onSelect={handlePickSeries}
+              />
+            ))}
+          </SpotifyRow>
+
+          <SpotifyRow
+            tone="dark"
+            rows={2}
+            title="Build with Claude"
+            subtitle="Projects using Claude and Claude Code"
+          >
+            {claudeProjects.map((project) => (
+              <ProjectIconCard
+                key={project.id}
+                project={project}
+                onSelect={handlePickProject}
+                tone="dark"
+                wide
+              />
+            ))}
+          </SpotifyRow>
+
+          <SpotifyRow
+            tone="dark"
+            title="Specialty Tracks"
+            subtitle="Deep dives into a single discipline"
+          >
+            {specialtyTracks.map((series) => (
+              <CourseTile
+                key={series.id}
+                series={series}
+                onSelect={handlePickSeries}
+              />
+            ))}
+          </SpotifyRow>
+
+          <SpotifyRow
+            tone="dark"
+            rows={2}
+            title="Build on AWS"
+            subtitle="Foundational and applied AWS projects"
+          >
+            {awsProjects.map((project) => (
+              <ProjectIconCard
+                key={project.id}
+                project={project}
+                onSelect={handlePickProject}
+                tone="dark"
+                wide
+              />
+            ))}
+          </SpotifyRow>
+
+          <SpotifyRow
+            tone="dark"
+            title="Tool Deep-Dives"
+            subtitle="One-tool tutorials — Lambda, EKS, Docker, Cursor, more"
+          >
+            {toolDeepDives.map((series) => (
+              <CourseTile
+                key={series.id}
+                series={series}
+                onSelect={handlePickSeries}
+              />
+            ))}
+          </SpotifyRow>
+        </div>
+
+        {/* Footer — ported from the marketing site so the prototype reads
+            as a complete page concept rather than a single-screen demo.
+            Sits inside the dark panel so the leather ground continues
+            edge-to-edge with no seam. */}
+        <Footer />
+      </section>
 
       <GenerateProjectInput
         value={inputValue}

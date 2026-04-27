@@ -8,7 +8,7 @@
 // reintroduces validation blocks for living documentation.
 
 import { motion, AnimatePresence } from 'motion/react'
-import { memo, useCallback, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import type { PillDefinition, ResearchFinding, Step } from '@/lib/state'
 import { StepPill } from './StepPill'
 import { ResearchCard } from './ResearchCard'
@@ -59,6 +59,11 @@ export interface StepCardProps {
    *  the step's index. Wires up to App's handleTriggerNextStep, the same
    *  callback DP1.7.F's Continue CTA will fire. */
   onTriggerStep?: (stepIndex: number) => void
+  /** DP1.8.A.2 — pill escape hatch. Forwarded to each StepPill row so the
+   *  "Talk it through →" link can hand the decision off to App, which opens
+   *  the chat tray with a seeded system message. Optional: when undefined,
+   *  StepPill suppresses the link. */
+  onAskAboutPill?: (stepId: string, decisionType: string) => void
 }
 
 function StepCardImpl({
@@ -77,6 +82,7 @@ function StepCardImpl({
   onBranchDismiss,
   headingStartDelay = 0,
   onTriggerStep,
+  onAskAboutPill,
 }: StepCardProps) {
   // Local "reopen the pill row" state — tracks which decisionType's chip
   // the student has tapped to edit again. Null = no chip is open.
@@ -110,6 +116,16 @@ function StepCardImpl({
     setReopenedDecision(decisionType)
   }, [])
 
+  // DP1.8.A.2 — bind the step id once so StepPill stays decoupled from
+  // step identity. StepPill carries decisionType in its row, the step id
+  // is contributed by the card.
+  const handleAskAboutPill = useCallback(
+    (decisionType: string) => {
+      onAskAboutPill?.(step.id, decisionType)
+    },
+    [onAskAboutPill, step.id],
+  )
+
   // Chunk B wires this to enterFocus(stepId) via CanvasScreen's prop drill.
   // Falls back to a console log in case the prop isn't passed (e.g. a test
   // harness mounts StepCard standalone).
@@ -133,6 +149,26 @@ function StepCardImpl({
   }, [onTriggerStep, stepIndex])
 
   const isPending = step.generationStatus === 'pending'
+
+  // DP1.8.D.3 — track when the first-reveal block cascade has finished so
+  // the StepCard chrome can drop its border while content is mid-typewriter.
+  // Flips once via BlockList's onAllBlocksComplete; never re-arms on sculpt
+  // refresh because that path uses the static crossfade, not the cascade.
+  const [cascadeComplete, setCascadeComplete] = useState(false)
+  useEffect(() => {
+    // If the step transitions BACK to a non-ready status (rare — sculpt that
+    // re-fires generation), reset so the next first-reveal can drop the
+    // border again. 'ready' steps that already completed stay completed.
+    if (step.generationStatus !== 'ready') {
+      setCascadeComplete(false)
+    }
+  }, [step.generationStatus])
+  const handleAllBlocksComplete = useCallback(() => {
+    setCascadeComplete(true)
+  }, [])
+  const hasBlocks = step.blocks !== undefined && step.blocks.length > 0
+  const isCascadeTyping =
+    step.generationStatus === 'ready' && hasBlocks && !cascadeComplete
 
   // Derive pill option lists during render from the plan's pillDefinitions.
   // RP1: each definition carries its own options[] (strings), so the option
@@ -160,7 +196,9 @@ function StepCardImpl({
   // experience still lives here until Chunk B + D retire it.
   const chromeClass = isExpanded
     ? 'rounded-2xl border border-brand-50 bg-warm-white p-4 shadow-[var(--shadow-card)]'
-    : 'rounded-xl border border-brand-50 px-4 py-4 hover:bg-warm-white/70 hover:border-brand-100 transition-colors'
+    : isCascadeTyping
+      ? 'rounded-xl px-4 py-4 transition-colors'
+      : 'rounded-xl border border-brand-50 px-4 py-4 hover:bg-warm-white/70 hover:border-brand-100 transition-colors'
 
   return (
     <motion.article
@@ -297,7 +335,10 @@ function StepCardImpl({
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
               >
-                <BlockList blocks={step.blocks} />
+                <BlockList
+                  blocks={step.blocks}
+                  onAllBlocksComplete={handleAllBlocksComplete}
+                />
               </motion.div>
             ) : null}
           </AnimatePresence>
@@ -335,6 +376,9 @@ function StepCardImpl({
                   onReopen={handleReopen}
                   isOpen={isOpen}
                   rationale={definition?.rationale}
+                  onAskAboutPill={
+                    onAskAboutPill ? handleAskAboutPill : undefined
+                  }
                 />
                 {/* ResearchCard stays behind the expand gate — it's the
                     detailed reasoning view, more verbose than the pill

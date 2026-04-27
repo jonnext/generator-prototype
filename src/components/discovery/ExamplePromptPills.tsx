@@ -22,14 +22,14 @@ export function ExamplePromptPills({ onPick }: ExamplePromptPillsProps) {
     <div
       role="group"
       aria-label="Example projects"
-      className="flex flex-wrap items-start justify-center gap-2.5"
+      className="mx-auto grid w-full max-w-2xl grid-cols-1 gap-2.5 sm:grid-cols-2"
     >
       {EXAMPLE_PROMPTS.map((prompt) => (
         <button
           key={prompt}
           type="button"
           onClick={() => onPick(prompt)}
-          className="flex items-center gap-2 rounded-full border border-solid border-[#ECE7DA] bg-white/50 px-4.5 py-2.5 text-[14px]/[18px] text-leather transition-colors hover:bg-white hover:border-[#D9D2C5] focus:outline-none focus-visible:ring-2 focus-visible:ring-leather/30"
+          className="flex items-center gap-2 justify-self-start rounded-full border border-solid border-[#ECE7DA] bg-white/50 px-4.5 py-2.5 text-[14px]/[18px] text-leather transition-colors hover:bg-white hover:border-[#D9D2C5] focus:outline-none focus-visible:ring-2 focus-visible:ring-leather/30"
         >
           <span className="font-medium" aria-hidden="true">
             →

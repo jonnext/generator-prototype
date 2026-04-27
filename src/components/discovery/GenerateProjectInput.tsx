@@ -54,10 +54,15 @@ export function GenerateProjectInput({
 
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-17 z-30 flex justify-center px-4">
+      {/* Border bumped to 1px solid and shadow swapped from a dark drop
+          to a white-tinted glow, both per Paper artboard 4LA-0
+          (frame 4QL-0). The white glow is what lifts the input off the
+          dark panel — a dark drop-shadow disappears against the leather
+          ground; the white halo reads as a soft spotlight instead. */}
       <div
-        className="pointer-events-auto flex w-[min(637px,100%)] items-center gap-2 rounded-[28px] border-[0.5px] border-solid border-[#E5DEDA] bg-white py-1 pl-5 pr-2"
+        className="pointer-events-auto flex w-[min(637px,100%)] items-center gap-2 rounded-[28px] border border-solid border-[#E5DEDA] bg-white py-1 pl-5 pr-2"
         style={{
-          boxShadow: '0px 2px 33px rgba(0, 0, 0, 0.18)',
+          boxShadow: '0px 2px 22px rgba(255, 255, 255, 0.58)',
         }}
       >
         <label htmlFor={inputId} className="sr-only">
@@ -107,7 +112,7 @@ export function GenerateProjectInput({
           onClick={trySubmit}
           disabled={value.trim().length === 0}
           aria-label="Generate Project"
-          className="relative flex h-10.25 shrink-0 items-center justify-center gap-2 overflow-hidden rounded-[10px] bg-[#301C2A] px-5 text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-leather/30"
+          className="relative flex h-10.25 w-[176px] shrink-0 items-center justify-center gap-2 overflow-hidden rounded-[10px] bg-[#111827] px-5 text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-leather/30"
         >
           {/* Dithering shader values lifted from Paper canvas JSX export. */}
           <Dithering

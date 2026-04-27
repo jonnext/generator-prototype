@@ -23,7 +23,7 @@ import { memo, useCallback, useState } from 'react'
 import type { ListBlock as ListBlockType, ListItem } from '@/lib/state'
 import { TextSpans } from './TextSpanRenderer'
 import { Typewriter } from '@/components/Typewriter'
-import { flattenSpansToText } from './typewriterText'
+import { BLOCK_TYPEWRITER_SPEED_MS, flattenSpansToText } from './typewriterText'
 
 export interface ListBlockViewProps {
   block: ListBlockType
@@ -81,6 +81,7 @@ function ItemContent({ item, isActive, isPast, onComplete }: ItemContentProps) {
       <Typewriter
         as="span"
         text={flattenSpansToText(item.content)}
+        speedMs={BLOCK_TYPEWRITER_SPEED_MS}
         onComplete={onComplete}
       />
     )

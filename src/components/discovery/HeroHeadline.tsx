@@ -9,6 +9,13 @@
 // clamp now that the headline lives in a 50% column on Discovery rather
 // than spanning the page. The smaller cap keeps the line breaking
 // gracefully without forcing an awkward two-line wrap.
+//
+// 2026-04-27: cap reduced to 72px to match Paper artboard 4LA-0 (frame
+// 4LG-0 — fontSize 72px, lineHeight 92px). At 96px the headline wrapped
+// to two lines on the 1440px Discovery layout because 8vw = 115.2px hits
+// the cap rather than scaling down with the viewport. 5vw with a 72px
+// ceiling lands on a single line at desktop while still scaling down
+// gracefully on narrow screens.
 
 export interface HeroHeadlineProps {
   className?: string
@@ -22,8 +29,8 @@ export function HeroHeadline({ className }: HeroHeadlineProps) {
         (className ? ` ${className}` : '')
       }
       style={{
-        fontSize: 'clamp(48px, 8vw, 96px)',
-        lineHeight: '1.04',
+        fontSize: 'clamp(48px, 5vw, 72px)',
+        lineHeight: '92px',
         letterSpacing: '-0.03em',
       }}
     >

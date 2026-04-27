@@ -114,6 +114,27 @@ export interface ToolbarProps {
   onOpenChat: () => void
   onCloseChat: () => void
   onChatSend: (text: string, isInterrupt: boolean) => void
+  /**
+   * DP1.8.A.1 — transient seed message rendered above the thread when the
+   * chat tray is opened from a StepPill's "Talk it through →" link. App
+   * owns the state and clears it on close. Forwarded verbatim to ChatTray.
+   */
+  chatSeedMessage?: string
+  /**
+   * DP1.8.A.3 — pill the seed message is scoped to. Required for the inline
+   * "Add as option" button. Forwarded to ChatTray alongside the seed.
+   */
+  chatPillContext?: { stepId: string; decisionType: string }
+  /**
+   * DP1.8.A.3 — handler for adding a chat-proposed option to a pill row.
+   * Forwarded to ChatTray; App dispatches EXTEND_PILL_OPTIONS and closes
+   * the tray.
+   */
+  onAddPillOption?: (
+    stepId: string,
+    decisionType: string,
+    newOption: string,
+  ) => void
 }
 
 // ----------------------------------------------------------------------------
@@ -130,6 +151,9 @@ function ToolbarImpl({
   onOpenChat,
   onCloseChat,
   onChatSend,
+  chatSeedMessage,
+  chatPillContext,
+  onAddPillOption,
 }: ToolbarProps) {
   const mode = selectToolbarMode(phase)
 
@@ -226,6 +250,9 @@ function ToolbarImpl({
             onOpenChat={handleOpenCanvasChat}
             onCloseChat={onCloseChat}
             onChatSend={onChatSend}
+            chatSeedMessage={chatSeedMessage}
+            chatPillContext={chatPillContext}
+            onAddPillOption={onAddPillOption}
           />
         )}
       </div>
@@ -330,6 +357,13 @@ interface CanvasToolbarProps {
   onOpenChat: () => void
   onCloseChat: () => void
   onChatSend: (text: string, isInterrupt: boolean) => void
+  chatSeedMessage?: string
+  chatPillContext?: { stepId: string; decisionType: string }
+  onAddPillOption?: (
+    stepId: string,
+    decisionType: string,
+    newOption: string,
+  ) => void
 }
 
 function CanvasToolbarImpl({
@@ -342,6 +376,9 @@ function CanvasToolbarImpl({
   onOpenChat,
   onCloseChat,
   onChatSend,
+  chatSeedMessage,
+  chatPillContext,
+  onAddPillOption,
 }: CanvasToolbarProps) {
   // Dock hint copy is phase-driven via getDockCopy — Chunk A wires the
   // sculpting-state copy ("All five steps ready — tap any to begin, or ask
@@ -363,6 +400,9 @@ function CanvasToolbarImpl({
             isGenerating={isGenerating}
             onClose={onCloseChat}
             onSend={onChatSend}
+            seedMessage={chatSeedMessage}
+            pillContext={chatPillContext}
+            onAddPillOption={onAddPillOption}
           />
         </motion.div>
       ) : (

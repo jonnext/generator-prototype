@@ -218,6 +218,12 @@ type StepChoicesAction =
   | { type: 'SET_STEP_BLOCKS'; stepId: string; blocks: ContentBlock[] }
   | { type: 'SET_STEP_GENERATION_STATUS'; stepId: string; status: StepGenerationStatus }
   | { type: 'SET_DIAGRAM'; url?: string; status: DiagramStatus }
+  | {
+      type: 'EXTEND_PILL_OPTIONS'
+      stepId: string
+      decisionType: string
+      newOption: string
+    }
   | { type: 'RESET' }
 
 function mapStep(
@@ -345,6 +351,44 @@ function stepChoicesReducer(
       }
     }
 
+    case 'EXTEND_PILL_OPTIONS': {
+      // DP1.8.A.3 — chat-driven pill extension. The student talked a decision
+      // through in the chat tray and the assistant suggested a fourth option;
+      // tapping the inline "Add as option" button dispatches this action.
+      // Two effects in one pass: append the new option to the shared
+      // pillDefinition.options array (skip if already present) AND select it
+      // on the originating step so the canvas reflects the choice without a
+      // second tap. aiPicked stays false — the student deliberately accepted
+      // the suggestion, this is a user-confirmed selection.
+      if (!state.actionPlan) return state
+      const existing = state.actionPlan.pillDefinitions[action.decisionType]
+      if (!existing) return state
+      const alreadyPresent = existing.options.includes(action.newOption)
+      const nextDefinitions = alreadyPresent
+        ? state.actionPlan.pillDefinitions
+        : {
+            ...state.actionPlan.pillDefinitions,
+            [action.decisionType]: {
+              ...existing,
+              options: [...existing.options, action.newOption],
+            },
+          }
+      return {
+        ...state,
+        actionPlan: {
+          ...mapStep(state.actionPlan, action.stepId, (step) => ({
+            ...step,
+            pills: step.pills.map((pill) =>
+              pill.decisionType === action.decisionType
+                ? { ...pill, selected: action.newOption, aiPicked: false }
+                : pill,
+            ),
+          })),
+          pillDefinitions: nextDefinitions,
+        },
+      }
+    }
+
     case 'RESET':
       return INITIAL_CHOICES
   }
@@ -384,6 +428,18 @@ export interface StepChoicesSlice {
    * Gemini call resolves. No-op if there's no active actionPlan.
    */
   setDiagram: (status: DiagramStatus, url?: string) => void
+  /**
+   * DP1.8.A.3 — extend a pill's option set with a new value (e.g. from a
+   * chat-driven "I'd suggest adding **Postgres**" suggestion) and select it
+   * on the originating step in one atomic dispatch. No-op if the
+   * pillDefinition or actionPlan is missing. Idempotent on a duplicate
+   * newOption — selection still flips, but the options array stays.
+   */
+  extendPillOptions: (
+    stepId: string,
+    decisionType: string,
+    newOption: string,
+  ) => void
   resetStepChoices: () => void
 }
 
@@ -440,6 +496,16 @@ export function useStepChoices(): StepChoicesSlice {
       dispatch({ type: 'SET_DIAGRAM', status, url }),
     [],
   )
+  const extendPillOptions = useCallback(
+    (stepId: string, decisionType: string, newOption: string) =>
+      dispatch({
+        type: 'EXTEND_PILL_OPTIONS',
+        stepId,
+        decisionType,
+        newOption,
+      }),
+    [],
+  )
   const resetStepChoices = useCallback(() => dispatch({ type: 'RESET' }), [])
 
   return {
@@ -454,6 +520,7 @@ export function useStepChoices(): StepChoicesSlice {
     setStepBlocks,
     setStepGenerationStatus,
     setDiagram,
+    extendPillOptions,
     resetStepChoices,
   }
 }

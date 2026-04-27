@@ -13,7 +13,7 @@ import { memo, useState } from 'react'
 import type { HeadingBlock as HeadingBlockType } from '@/lib/state'
 import { TextSpans } from './TextSpanRenderer'
 import { Typewriter } from '@/components/Typewriter'
-import { flattenSpansToText } from './typewriterText'
+import { BLOCK_TYPEWRITER_SPEED_MS, flattenSpansToText } from './typewriterText'
 
 export interface HeadingBlockViewProps {
   block: HeadingBlockType
@@ -29,6 +29,7 @@ function HeadingBlockViewImpl({ block, typewriter }: HeadingBlockViewProps) {
         <Typewriter
           as="span"
           text={flattenSpansToText(block.content)}
+          speedMs={BLOCK_TYPEWRITER_SPEED_MS}
           onComplete={() => {
             setTyped(true)
             typewriter.onComplete()

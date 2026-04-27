@@ -520,6 +520,7 @@ export function App() {
     setDiagram,
     expandStep,
     setStepPill,
+    extendPillOptions,
     openChat,
     closeChat,
     addChatMessage,
@@ -537,6 +538,19 @@ export function App() {
   } = engine
 
   const [isAddingStep, setIsAddingStep] = useState(false)
+
+  // DP1.8.A.1 — transient chat seed + pill context. Set when the student
+  // taps "Talk it through →" on a StepPill row; cleared when the tray
+  // closes so seeds don't accumulate across opens. Both pieces of state
+  // are tied to the same lifecycle so they co-mutate via a tiny patch
+  // helper rather than two parallel setters.
+  const [chatSeedMessage, setChatSeedMessage] = useState<string | undefined>(
+    undefined,
+  )
+  const [chatPillContext, setChatPillContext] = useState<
+    { stepId: string; decisionType: string } | undefined
+  >(undefined)
+
   // DP1.5.H — research activity indicator. True whenever at least one
   // fireResearch run is in flight (Phase R). The pulse lives in the canvas
   // top-right; App.tsx owns the flag, CanvasScreen renders the pulse.
@@ -585,6 +599,12 @@ export function App() {
   // props and defeating useCallback memoization.
   const chatMessagesRef = useRef<ChatMessage[]>(chat.messages)
   chatMessagesRef.current = chat.messages
+  // DP1.8.A.1 — seed message ref so handleChatSend can fold the seed into
+  // the forwarded transcript without depending on chatSeedMessage in its
+  // deps array (which would churn the callback every time the seed
+  // toggles between defined and undefined).
+  const chatSeedMessageRef = useRef<string | undefined>(chatSeedMessage)
+  chatSeedMessageRef.current = chatSeedMessage
   // Phase ref follows the same mirror pattern so handleChatSend can read the
   // live phase without being recreated on every phase flip. Using an effect
   // (not inline assignment) keeps the closure-visible value consistent with
@@ -1104,6 +1124,86 @@ export function App() {
     [setStepPill, triggerSculpt],
   )
 
+  // DP1.8.A.2 — pill escape hatch entry point. The "Talk it through →"
+  // link on each StepPill row hands off to this handler with its step id
+  // and decision type. We build a system-style seed message that names
+  // the decision + options + step heading so the assistant can walk
+  // through trade-offs, and instruct it to suffix any fourth-option
+  // suggestion with a detectable envelope (matched in ChatTray by
+  // ADD_OPTION_REGEX) so the inline "Add as option" button can surface.
+  const handleAskAboutPill = useCallback(
+    (stepId: string, decisionType: string) => {
+      const plan = actionPlanRef.current
+      if (!plan) return
+      const stepIndex = plan.steps.findIndex((s) => s.id === stepId)
+      if (stepIndex === -1) return
+      const step = plan.steps[stepIndex]
+      const definition = plan.pillDefinitions[decisionType]
+      if (!step || !definition) return
+
+      const stepNumber = (stepIndex + 1).toString().padStart(2, '0')
+      const optionList = definition.options.join(' / ')
+      const seed = [
+        `You're choosing between ${optionList} for ${definition.question} on Step ${stepNumber}: '${step.heading}'.`,
+        '- Walk through the trade-offs concisely (3 sentences max).',
+        '- If the student proposes a new option that fits, end your response with: "I\'d suggest adding **OPTION_NAME** as a fourth option here." (exact format — the canvas detects this phrase to surface an Add-as-option button.)',
+      ].join('\n')
+
+      setChatSeedMessage(seed)
+      setChatPillContext({ stepId, decisionType })
+      openChat()
+    },
+    [openChat],
+  )
+
+  // DP1.8.A.3 — accept a chat-proposed fourth option. Dispatches the
+  // EXTEND_PILL_OPTIONS reducer action (appends to options + selects on
+  // the originating step in one pass) and closes the tray so the student
+  // returns to the canvas with the new selection visible. Closing also
+  // clears the seed via handleCloseChat below.
+  const handleAddPillOption = useCallback(
+    (stepId: string, decisionType: string, newOption: string) => {
+      extendPillOptions(stepId, decisionType, newOption)
+      closeChat()
+      setChatSeedMessage(undefined)
+      setChatPillContext(undefined)
+
+      // Mirror handleStepPickPill's sculpt re-fire so the canvas updates the
+      // step body to reflect the new pill choice. The plan is read from the
+      // ref because extendPillOptions just dispatched a reducer update —
+      // actionPlanRef.current is the pre-dispatch snapshot, but the step
+      // heading we need for the sculpt context is unchanged either way.
+      const plan = actionPlanRef.current
+      if (!plan) return
+      const step = plan.steps.find((s) => s.id === stepId)
+      if (!step) return
+      const existingPill = step.pills.find(
+        (p) => p.decisionType === decisionType,
+      )
+      const oldSelection = existingPill?.selected ?? null
+      if (oldSelection === newOption) return
+      triggerSculpt({
+        kind: 'pill-toggle',
+        stepId,
+        stepHeading: step.heading,
+        decisionType,
+        newSelection: newOption,
+        oldSelection,
+      })
+    },
+    [extendPillOptions, closeChat, triggerSculpt],
+  )
+
+  // DP1.8.A.1 — wrap closeChat so the seed + pill context are cleared
+  // when the tray collapses. Without this the next time the tray opens
+  // (e.g. via the regular Chat pill in the toolbar) the stale seed would
+  // still render.
+  const handleCloseChat = useCallback(() => {
+    closeChat()
+    setChatSeedMessage(undefined)
+    setChatPillContext(undefined)
+  }, [closeChat])
+
 
   // "+ Add step" — calls Claude for a single new step and appends it.
   // Optional `topic` shapes the step around the student's words (used by
@@ -1228,7 +1328,28 @@ export function App() {
       // dispatches synchronously, but the ref still holds the pre-dispatch
       // snapshot — append the new message manually to keep the forwarded
       // transcript current.
-      const forwarded = [...chatMessagesRef.current, userMessage]
+      // DP1.8.A.1 — when the tray was opened via a "Talk it through →"
+      // pill seed, prepend the seed as a synthetic user-role context
+      // message so Claude sees the decision being discussed without
+      // requiring a wire-format change to the chat ack endpoint. Role
+      // 'user' (not 'assistant') is deliberate — the seed is context the
+      // student would have typed if they were spelling out which pill
+      // they're asking about.
+      const seed = chatSeedMessageRef.current
+      const seedPrefix: ChatMessage[] = seed
+        ? [
+            {
+              id: `seed-${Date.now()}`,
+              role: 'user',
+              content: seed,
+            },
+          ]
+        : []
+      const forwarded = [
+        ...seedPrefix,
+        ...chatMessagesRef.current,
+        userMessage,
+      ]
 
       // Only run the chat flow when we have an intent (student is on the
       // canvas). If intent is empty we just append the user bubble and let
@@ -1408,6 +1529,7 @@ export function App() {
         onBranchApply={handleBranchApply}
         onBranchDismiss={handleBranchDismiss}
         onTriggerStep={handleTriggerNextStep}
+        onAskAboutPill={handleAskAboutPill}
       />
     )
   }
@@ -1428,8 +1550,11 @@ export function App() {
           chatMessages={chat.messages}
           isChatOpen={chat.isOpen}
           onOpenChat={openChat}
-          onCloseChat={closeChat}
+          onCloseChat={handleCloseChat}
           onChatSend={handleChatSend}
+          chatSeedMessage={chatSeedMessage}
+          chatPillContext={chatPillContext}
+          onAddPillOption={handleAddPillOption}
         />
       ) : null}
       <ResearchDebugPanel />

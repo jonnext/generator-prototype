@@ -5,7 +5,7 @@
 export const EXAMPLE_PROMPTS = [
   'A daily AI briefing with OpenClaw',
   'A Hermes Autonomous agent',
-  'A Claude app for my fitness goals',
+  'a Claude app for my fitness goals',
   'A containerised API on AWS',
 ] as const
 

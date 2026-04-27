@@ -23,7 +23,7 @@ export interface TypewriterProps {
   as?: 'span' | 'p' | 'h1' | 'h2' | 'h3' | 'h4'
 }
 
-const DEFAULT_SPEED_MS = 30
+const DEFAULT_SPEED_MS = 45
 
 function TypewriterImpl({
   text,

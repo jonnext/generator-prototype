@@ -24,6 +24,7 @@ import { motion } from 'motion/react'
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useState, useTransition } from 'react'
 import { ArchitectureDiagram } from '@/components/canvas/ArchitectureDiagram'
 import { ContinueStepCTA } from '@/components/canvas/ContinueStepCTA'
+import { GenerateFullProjectButton } from '@/components/canvas/GenerateFullProjectButton'
 import { ProjectHeader } from '@/components/canvas/ProjectHeader'
 import { MetadataRow } from '@/components/canvas/MetadataRow'
 import { PlaceholderStepRow } from '@/components/canvas/PlaceholderStepRow'
@@ -198,6 +199,26 @@ function CanvasScreenImpl({
   // events stay responsive during heavy reflow.
   const [, startPhaseTransition] = useTransition()
 
+  // Session B (ChatGPT-Canvas-style preview) — local outline-vs-full toggle.
+  //
+  // While `outlinePreview === true`:
+  //   - MetadataRow is collapsed away
+  //   - StepCard renders in compact mode (heading + summary chip strip)
+  //   - the inline GenerateFullProjectButton is the commit affordance
+  // Once the user taps the button, this flips to false and the canvas
+  // rehydrates into today's full chrome (block body, pill rows, etc.).
+  //
+  // Defaults to true so the preview is the first read once actionPlan
+  // lands. While actionPlan is null (Phase A still pending), CanvasScreen
+  // renders skeleton placeholders — this flag has no effect on that path.
+  // Lives ENTIRELY inside CanvasScreen on purpose: per the Session B brief,
+  // the Phase enum in src/lib/state.ts is unchanged. Plan-vs-build is a
+  // local view concern here, not a global state machine transition.
+  const [outlinePreview, setOutlinePreview] = useState(true)
+  const handleCommitFullProject = useCallback(() => {
+    setOutlinePreview(false)
+  }, [])
+
   // Thread 1 scroll fix — when the Canvas enters the `materializing` phase
   // after Discovery, the sibling AnimatePresence (popLayout) in App.tsx still
   // has Discovery occupying viewport height during the shared-element morph,
@@ -310,6 +331,16 @@ function CanvasScreenImpl({
         : metadataStartMs + METADATA_FADE_DURATION_MS + METADATA_TO_STEPS_BEAT_MS,
     [metadataStartMs, prefersReducedMotion],
   )
+
+  // Session B — reveal delay for the inline "Generate full project →" CTA.
+  // Aligned with the heading-cascade-complete moment used for descriptionRevealed
+  // above: last heading starts at `(stepCount-1)*1500` and types ~600ms;
+  // +200ms beat for the eye to settle. Reduced motion lands the CTA on mount.
+  const previewCtaRevealDelaySec = useMemo(() => {
+    if (prefersReducedMotion) return 0
+    const stepCount = Math.max(1, actionPlan?.steps.length ?? 5)
+    return ((stepCount - 1) * STEP_CASCADE_INTERVAL_MS + 800) / 1000
+  }, [actionPlan?.steps.length, prefersReducedMotion])
 
   // ---- StepCard handlers ---------------------------------------------------
   // Each handler is a thin wrapper over the engine setters so CanvasScreen
@@ -443,22 +474,29 @@ function CanvasScreenImpl({
             ONLY after the header title finishes typing. Without this gate
             the row was visible from t=0 alongside a typing header, which
             collided with the "agent building the outline" sequence Jon
-            sketched in the timeline brief. */}
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{
-            delay: metadataStartMs / 1000,
-            duration: METADATA_FADE_DURATION_MS / 1000,
-            ease: 'easeOut',
-          }}
-        >
-          <MetadataRow
-            personal={personal}
-            origins={personalOrigins}
-            onChange={handlePersonalChange}
-          />
-        </motion.div>
+            sketched in the timeline brief.
+            Session B — collapsed away entirely while `outlinePreview` is
+            true. The preview is intentionally low-density: heading-only
+            cards anchored by the architecture diagram. The metadata pills
+            re-mount once the user commits via GenerateFullProjectButton.
+            We deliberately keep the same wrapped-motion render shape on the
+            full path so the fade-in choreography is preserved. */}
+        {outlinePreview ? null : (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{
+              duration: METADATA_FADE_DURATION_MS / 1000,
+              ease: 'easeOut',
+            }}
+          >
+            <MetadataRow
+              personal={personal}
+              origins={personalOrigins}
+              onChange={handlePersonalChange}
+            />
+          </motion.div>
+        )}
 
         {/* Steps region — skeleton in materializing, real plan in I6+ */}
         <motion.section
@@ -476,8 +514,16 @@ function CanvasScreenImpl({
                 // and re-emerges once that step reaches 'ready' if step+2 is
                 // still pending. Sculpt-refresh path keeps status 'ready' so
                 // the CTA stays put across regen — no extra plumbing needed.
+                //
+                // Session B — suppressed while outlinePreview is true. The
+                // single inline GenerateFullProjectButton below the last
+                // step replaces every per-step Continue affordance during
+                // the preview read. Once the user commits, the per-step
+                // CTAs re-emerge naturally (they're a function of step
+                // generationStatus, which the commit doesn't touch).
                 const nextStep = actionPlan.steps[index + 1]
                 const showContinueCTA =
+                  !outlinePreview &&
                   step.generationStatus === 'ready' &&
                   nextStep !== undefined &&
                   nextStep.generationStatus === 'pending'
@@ -488,7 +534,7 @@ function CanvasScreenImpl({
                         step={step}
                         stepIndex={index}
                         pillDefinitions={actionPlan.pillDefinitions}
-                        isExpanded={expandedStepId === step.id}
+                        isExpanded={!outlinePreview && expandedStepId === step.id}
                         onExpand={handleExpandStep}
                         onCollapse={handleCollapseStep}
                         onPickPill={onPickPill}
@@ -501,6 +547,7 @@ function CanvasScreenImpl({
                         headingStartDelay={prefersReducedMotion ? 0 : index * 1500}
                         onTriggerStep={onTriggerStep}
                         onAskAboutPill={onAskAboutPill}
+                        mode={outlinePreview ? 'compact' : 'full'}
                       />
                     </motion.div>
                     {showContinueCTA && nextStep ? (
@@ -547,7 +594,20 @@ function CanvasScreenImpl({
                   </motion.div>
                 )
               })}
-          {actionPlan && phase === 'learning' ? (
+          {/* Session B — inline commit affordance. Sits below the last step
+              heading while outlinePreview is true and actionPlan exists.
+              Tapping flips outlinePreview to false; the canvas rehydrates
+              into today's full chrome (MetadataRow + StepCard mode='full'
+              + per-step ContinueStepCTAs). The reveal delay aligns with
+              the heading-cascade-complete moment so the affordance arrives
+              after the user has read the outline, not during typing. */}
+          {actionPlan && outlinePreview ? (
+            <GenerateFullProjectButton
+              onGenerate={handleCommitFullProject}
+              revealDelaySec={previewCtaRevealDelaySec}
+            />
+          ) : null}
+          {actionPlan && !outlinePreview && phase === 'learning' ? (
             <button
               type="button"
               onClick={onAddStep}

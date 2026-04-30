@@ -64,6 +64,24 @@ export interface StepCardProps {
    *  the chat tray with a seeded system message. Optional: when undefined,
    *  StepPill suppresses the link. */
   onAskAboutPill?: (stepId: string, decisionType: string) => void
+  /**
+   * Session B (ChatGPT-Canvas-style preview) — render mode.
+   *
+   *  - 'full'    (default) — today's behavior. Block body, pill rows,
+   *                          ResearchCard on expand, hover Refine/Remove
+   *                          chips, pending-state alt link.
+   *  - 'compact' — heading + summary chip strip only. Used by CanvasScreen
+   *                while its local `outlinePreview` flag is true. Suppresses
+   *                the block body, hover affordances, the pending-state alt
+   *                link, and disables the heading toggle (no expand).
+   *                Pending headings are NOT dimmed in compact mode — every
+   *                outline row reads as a uniform draft of the plan.
+   *
+   * Optional, defaults to 'full'. Switching modes does NOT remount the card —
+   * the heading typewriter mounts inside the same `<button>` wrapper in both
+   * modes, so a flip from 'compact' to 'full' preserves typewriter state.
+   */
+  mode?: 'full' | 'compact'
 }
 
 function StepCardImpl({
@@ -83,18 +101,27 @@ function StepCardImpl({
   headingStartDelay = 0,
   onTriggerStep,
   onAskAboutPill,
+  mode = 'full',
 }: StepCardProps) {
+  // Session B — compact preview mode. Suppresses everything except the
+  // heading + the SummaryChipRow that already renders when !isExpanded.
+  const isCompact = mode === 'compact'
   // Local "reopen the pill row" state — tracks which decisionType's chip
   // the student has tapped to edit again. Null = no chip is open.
   const [reopenedDecision, setReopenedDecision] = useState<string | null>(null)
 
   const handleCardToggle = useCallback(() => {
+    // Compact preview mode is a read-only outline; the heading button is
+    // kept in the DOM (so the typewriter doesn't remount on mode flips)
+    // but the toggle is a no-op. The full canvas, post-commit, is where
+    // expand/collapse becomes meaningful again.
+    if (isCompact) return
     if (isExpanded) {
       onCollapse(step.id)
     } else {
       onExpand(step.id)
     }
-  }, [isExpanded, onCollapse, onExpand, step.id])
+  }, [isCompact, isExpanded, onCollapse, onExpand, step.id])
 
   const handlePick = useCallback(
     (decisionType: string, selected: string) => {
@@ -167,7 +194,11 @@ function StepCardImpl({
     setCascadeComplete(true)
   }, [])
   const hasBlocks = step.blocks !== undefined && step.blocks.length > 0
+  // Compact preview never renders blocks, so the cascade-typing border drop
+  // (which depends on a BlockList completion callback that won't fire here)
+  // shouldn't apply. Forcing `false` keeps the compact card's chrome stable.
   const isCascadeTyping =
+    !isCompact &&
     step.generationStatus === 'ready' && hasBlocks && !cascadeComplete
 
   // Derive pill option lists during render from the plan's pillDefinitions.
@@ -194,11 +225,16 @@ function StepCardImpl({
   //
   // Expanded: retains today's card chrome because the legacy inline pill
   // experience still lives here until Chunk B + D retire it.
-  const chromeClass = isExpanded
-    ? 'rounded-2xl border border-brand-50 bg-warm-white p-4 shadow-[var(--shadow-card)]'
-    : isCascadeTyping
-      ? 'rounded-xl px-4 py-4 transition-colors'
-      : 'rounded-xl border border-brand-50 px-4 py-4 hover:bg-warm-white/70 hover:border-brand-100 transition-colors'
+  // Compact preview gets a uniform bordered shell with no hover wash — the
+  // article is read-only, the heading button below is a no-op, so signaling
+  // interactivity via hover would mislead. Full mode keeps today's chrome.
+  const chromeClass = isCompact
+    ? 'rounded-xl border border-brand-50 px-4 py-4'
+    : isExpanded
+      ? 'rounded-2xl border border-brand-50 bg-warm-white p-4 shadow-[var(--shadow-card)]'
+      : isCascadeTyping
+        ? 'rounded-xl px-4 py-4 transition-colors'
+        : 'rounded-xl border border-brand-50 px-4 py-4 hover:bg-warm-white/70 hover:border-brand-100 transition-colors'
 
   return (
     <motion.article
@@ -238,12 +274,13 @@ function StepCardImpl({
           "Generate this step" link sits beside the title. */}
       <div className="flex w-full items-center justify-between gap-3">
         <h3
-          className={`font-heading m-0 text-base leading-snug text-leather md:text-lg flex-1 min-w-0 transition-opacity ${isPending ? 'opacity-60' : ''}`}
+          className={`font-heading m-0 text-base leading-snug text-leather md:text-lg flex-1 min-w-0 transition-opacity ${isPending && !isCompact ? 'opacity-60' : ''}`}
         >
           <button
             type="button"
             onClick={handleCardToggle}
-            className="flex w-full items-start gap-3 text-left font-heading"
+            aria-disabled={isCompact || undefined}
+            className={`flex w-full items-start gap-3 text-left font-heading ${isCompact ? 'cursor-default' : ''}`}
           >
             <span className="mt-0.5 text-xs text-brand-400">
               {(stepIndex + 1).toString().padStart(2, '0')}
@@ -265,7 +302,7 @@ function StepCardImpl({
             </motion.span>
           </button>
         </h3>
-        {isPending && onTriggerStep ? (
+        {!isCompact && isPending && onTriggerStep ? (
           <button
             type="button"
             onClick={handleTriggerStep}
@@ -275,7 +312,7 @@ function StepCardImpl({
             <span aria-hidden>↘</span>
           </button>
         ) : null}
-        {!isPending && !isExpanded ? (
+        {!isCompact && !isPending && !isExpanded ? (
           <div className="flex shrink-0 items-center gap-1.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
             <button
               type="button"
@@ -312,6 +349,10 @@ function StepCardImpl({
           protecting (non-empty summary state).
           DP1.7.G — pending steps render nothing here (heading-only). */}
       {(() => {
+        // Compact preview suppresses all body chrome — neither shimmer nor
+        // ready blocks render. The heading + summary chip strip carry the
+        // outline read entirely.
+        if (isCompact) return null
         if (isPending) return null
         const isShimmering =
           step.generationStatus === 'generating' ||
@@ -368,59 +409,68 @@ function StepCardImpl({
           walking back DP1.5's "blocks are inline" decision.
           DP1.7.G — pending steps suppress chips along with the block body
           so the deferred treatment stays heading-only. */}
-      {!isPending && step.pills.length > 0 ? (
-        <div className="pl-8 md:pl-9">
-          {isExpanded ? (
-            <div className="flex flex-col gap-3">
-              {step.pills.map((pill) => {
-                const definition = pillDefinitions[pill.decisionType]
-                const question = definition?.question ?? 'Pick one:'
-                const isOpen = reopenedDecision === pill.decisionType
-                return (
-                  <div
-                    key={pill.decisionType}
-                    className="flex w-full flex-col gap-2"
-                  >
-                    <StepPill
-                      row={pill}
-                      question={question}
-                      options={pillOptionsByDecision[pill.decisionType] ?? []}
-                      onPick={handlePick}
-                      onRandomize={handleRandomize}
-                      onReopen={handleReopen}
-                      isOpen={isOpen}
-                      rationale={definition?.rationale}
-                      onAskAboutPill={
-                        onAskAboutPill ? handleAskAboutPill : undefined
-                      }
-                    />
-                    {/* ResearchCard stays behind the expand gate — it's the
-                        detailed reasoning view, more verbose than the pill
-                        chip itself. Keep it opt-in via expansion. */}
-                    <AnimatePresence initial={false}>
-                      <motion.div
-                        key="research-card"
-                        variants={stepExpandVariants}
-                        initial="collapsed"
-                        animate="expanded"
-                        exit="collapsed"
-                        transition={stepExpand}
-                        className="overflow-hidden"
-                      >
-                        <ResearchCard
-                          decisionType={pill.decisionType}
-                          currentSelection={pill.selected}
-                        />
-                      </motion.div>
-                    </AnimatePresence>
-                  </div>
-                )
-              })}
-            </div>
-          ) : (
+      {step.pills.length > 0 ? (
+        isCompact ? (
+          // Compact preview: chip strip only, even for pending steps. The
+          // strip renders as the per-step summary of upcoming decisions
+          // ("Not picked" placeholders before any pick is committed).
+          <div className="pl-8 md:pl-9">
             <SummaryChipRow pills={step.pills} />
-          )}
-        </div>
+          </div>
+        ) : !isPending ? (
+          <div className="pl-8 md:pl-9">
+            {isExpanded ? (
+              <div className="flex flex-col gap-3">
+                {step.pills.map((pill) => {
+                  const definition = pillDefinitions[pill.decisionType]
+                  const question = definition?.question ?? 'Pick one:'
+                  const isOpen = reopenedDecision === pill.decisionType
+                  return (
+                    <div
+                      key={pill.decisionType}
+                      className="flex w-full flex-col gap-2"
+                    >
+                      <StepPill
+                        row={pill}
+                        question={question}
+                        options={pillOptionsByDecision[pill.decisionType] ?? []}
+                        onPick={handlePick}
+                        onRandomize={handleRandomize}
+                        onReopen={handleReopen}
+                        isOpen={isOpen}
+                        rationale={definition?.rationale}
+                        onAskAboutPill={
+                          onAskAboutPill ? handleAskAboutPill : undefined
+                        }
+                      />
+                      {/* ResearchCard stays behind the expand gate — it's the
+                          detailed reasoning view, more verbose than the pill
+                          chip itself. Keep it opt-in via expansion. */}
+                      <AnimatePresence initial={false}>
+                        <motion.div
+                          key="research-card"
+                          variants={stepExpandVariants}
+                          initial="collapsed"
+                          animate="expanded"
+                          exit="collapsed"
+                          transition={stepExpand}
+                          className="overflow-hidden"
+                        >
+                          <ResearchCard
+                            decisionType={pill.decisionType}
+                            currentSelection={pill.selected}
+                          />
+                        </motion.div>
+                      </AnimatePresence>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <SummaryChipRow pills={step.pills} />
+            )}
+          </div>
+        ) : null
       ) : null}
     </motion.article>
   )

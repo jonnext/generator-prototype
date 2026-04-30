@@ -6,7 +6,7 @@ You are implementing **one of two parallel design directions** for the C-1 Plan-
 
 The prototype lives at `/Users/jonneylon/Dev/Nextwork/generator-prototype-v2/` (mounted into your container working directory). It's a Vite + React + TypeScript + Motion + Tailwind app.
 
-**Your branch:** `experiment/c1-replit-toggle` — create from `main` and only push to this branch. Do not touch `main`.
+**Your branch:** `experiment/c1-replit-toggle` — create from `v2-outline-experiment` (this is the active prototype branch; `master` is the older default branch). Only push to your experiment branch. Do not touch `v2-outline-experiment` or `master`.
 
 ## Strategic context (read first)
 
@@ -61,5 +61,5 @@ Use the Paper MCP `get_jsx` tool on those node IDs to read the artboard structur
 - The architecture diagram remains the centerpiece in plan view.
 - Type-safety must hold.
 - No edits outside the listed files.
-- Your branch must not touch `main`.
+- Your branch must not touch `v2-outline-experiment` or `master`.
 - If you're stuck or need to deviate from the brief in a substantive way, document why in your final summary — don't silently ship a different design.

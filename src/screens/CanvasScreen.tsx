@@ -1,6 +1,8 @@
 // CanvasScreen — the continuous canvas that spans the post-discovery phases:
-//   1. materializing  (~600ms staggered reveal of header + metadata + skeletons)
-//   2. learning       (step cards visible, pills interactive, append/remove later)
+//   1. planning       (C-1 Pattern B pre-commit — heading-only outline +
+//                      ArchitectureDiagram + StartBuildingCTA)
+//   2. materializing  (~600ms staggered reveal of header + metadata + skeletons)
+//   3. learning       (step cards visible, pills interactive, append/remove later)
 //
 // Critical invariant: ONE component mounts for the life of the canvas visit.
 // Phases modulate what the canvas SHOWS, never whether it exists. That keeps
@@ -28,6 +30,7 @@ import { ProjectHeader } from '@/components/canvas/ProjectHeader'
 import { MetadataRow } from '@/components/canvas/MetadataRow'
 import { PlaceholderStepRow } from '@/components/canvas/PlaceholderStepRow'
 import { ResearchPulse } from '@/components/canvas/ResearchPulse'
+import { StartBuildingCTA } from '@/components/canvas/StartBuildingCTA'
 import { StepCard } from '@/components/canvas/StepCard'
 import {
   staggerParentVariants,
@@ -112,6 +115,10 @@ export interface CanvasScreenProps {
 // small; the rich phase narrative lives in the dock copy below.
 function phaseStatusLabel(phase: Phase): string {
   switch (phase) {
+    case 'planning':
+      // C-1 Pattern B — pre-commit pause. Different verb tense ("Planning",
+      // not "Sketching") signals the agent has paused for student input.
+      return 'Planning your project'
     case 'materializing':
       return 'Sketching your project'
     case 'learning':
@@ -198,19 +205,21 @@ function CanvasScreenImpl({
   // events stay responsive during heavy reflow.
   const [, startPhaseTransition] = useTransition()
 
-  // Thread 1 scroll fix — when the Canvas enters the `materializing` phase
-  // after Discovery, the sibling AnimatePresence (popLayout) in App.tsx still
-  // has Discovery occupying viewport height during the shared-element morph,
-  // so the newly mounted Canvas content lands below the fold. Jump to top
-  // BEFORE paint so the stagger sequence reveals in place.
+  // Thread 1 scroll fix — when the Canvas enters the post-discovery surface
+  // (planning under C-1 Pattern B, or materializing on legacy paths) the
+  // sibling AnimatePresence (popLayout) in App.tsx still has Discovery
+  // occupying viewport height during the shared-element morph, so the
+  // newly mounted Canvas content lands below the fold. Jump to top BEFORE
+  // paint so the stagger sequence reveals in place.
   //
-  // Keyed on `phase` only. Fires on the first render with `materializing` and
-  // any re-entry; does not fire while the canvas stays in sculpting/generating.
-  // `behavior: 'instant'` in both branches — prefers-reduced-motion is honoured
-  // by skipping `smooth`, which is already the API contract here.
+  // Keyed on `phase` only. Fires on the first render with `planning` /
+  // `materializing` and any re-entry; does not fire while the canvas stays
+  // in learning. `behavior: 'instant'` in both branches — prefers-reduced-
+  // motion is honoured by skipping `smooth`, which is already the API
+  // contract here.
   const prefersReducedMotion = usePrefersReducedMotion()
   useLayoutEffect(() => {
-    if (phase !== 'materializing') return
+    if (phase !== 'planning' && phase !== 'materializing') return
     if (typeof window === 'undefined') return
     // Instant scroll-to-top — no smooth behavior, so reduced-motion users and
     // regular users get the same jank-free snap. The variable is read so the
@@ -225,6 +234,21 @@ function CanvasScreenImpl({
     },
     [setPhase],
   )
+
+  // C-1 Plan-Then-Build (Pattern B) — explicit commit handler. Wired to
+  // the StartBuildingCTA at the bottom of the planning view. Uses the
+  // existing setPhase prop (per the brief's contract) wrapped in
+  // startTransition so the canvas-wide compact → full mode swap doesn't
+  // block input. The existing materializing reveal cascade lives inside
+  // StepCard / ContinueStepCTA / BlockShimmer — flipping phase to
+  // 'learning' is enough to engage them; we don't visit 'materializing'
+  // explicitly because the skeleton has already landed (planning gates
+  // the post-skeleton pause, not the pre-skeleton wait).
+  const handleStartBuilding = useCallback(() => {
+    startPhaseTransition(() => setPhase('learning'))
+  }, [setPhase])
+
+  const isPlanning = phase === 'planning'
 
   // MetadataRow only needs a single setter — stabilize via useCallback so
   // the memoized row doesn't re-render when other slices tick.
@@ -443,22 +467,28 @@ function CanvasScreenImpl({
             ONLY after the header title finishes typing. Without this gate
             the row was visible from t=0 alongside a typing header, which
             collided with the "agent building the outline" sequence Jon
-            sketched in the timeline brief. */}
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{
-            delay: metadataStartMs / 1000,
-            duration: METADATA_FADE_DURATION_MS / 1000,
-            ease: 'easeOut',
-          }}
-        >
-          <MetadataRow
-            personal={personal}
-            origins={personalOrigins}
-            onChange={handlePersonalChange}
-          />
-        </motion.div>
+            sketched in the timeline brief.
+            C-1 Pattern B — collapsed away entirely during planning. The
+            pre-commit outline is deliberately spare so the architecture
+            diagram + heading list stay the focus; pills re-mount once
+            the student commits and phase flips to 'learning'. */}
+        {!isPlanning ? (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{
+              delay: metadataStartMs / 1000,
+              duration: METADATA_FADE_DURATION_MS / 1000,
+              ease: 'easeOut',
+            }}
+          >
+            <MetadataRow
+              personal={personal}
+              origins={personalOrigins}
+              onChange={handlePersonalChange}
+            />
+          </motion.div>
+        ) : null}
 
         {/* Steps region — skeleton in materializing, real plan in I6+ */}
         <motion.section
@@ -477,7 +507,13 @@ function CanvasScreenImpl({
                 // still pending. Sculpt-refresh path keeps status 'ready' so
                 // the CTA stays put across regen — no extra plumbing needed.
                 const nextStep = actionPlan.steps[index + 1]
+                // C-1 Pattern B — the between-steps Continue CTA is a
+                // learning-surface affordance (committing the next step's
+                // generation). Suppress it during planning even if Phase B
+                // for step 1 happens to land while the student is still
+                // reviewing the outline.
                 const showContinueCTA =
+                  !isPlanning &&
                   step.generationStatus === 'ready' &&
                   nextStep !== undefined &&
                   nextStep.generationStatus === 'pending'
@@ -501,6 +537,7 @@ function CanvasScreenImpl({
                         headingStartDelay={prefersReducedMotion ? 0 : index * 1500}
                         onTriggerStep={onTriggerStep}
                         onAskAboutPill={onAskAboutPill}
+                        mode={isPlanning ? 'compact' : 'full'}
                       />
                     </motion.div>
                     {showContinueCTA && nextStep ? (
@@ -558,6 +595,20 @@ function CanvasScreenImpl({
             </button>
           ) : null}
         </motion.section>
+
+        {/* C-1 Plan-Then-Build (Pattern B) — explicit pre-commit CTA.
+            Visible only during planning; sits below the heading-only step
+            list as the deliberate "I've read the outline, build it"
+            handshake. The button is disabled until the skeleton lands so
+            the student can't commit to an empty plan. Once they tap, the
+            phase flips to 'learning' and the existing reveal cascade +
+            modular Phase B engages. */}
+        {isPlanning ? (
+          <StartBuildingCTA
+            onStartBuilding={handleStartBuilding}
+            disabled={!actionPlan}
+          />
+        ) : null}
       </motion.div>
       {/* ChatTray is mounted at App root (not here) so it survives phase
           transitions without unmounting and its layoutId-anchored position

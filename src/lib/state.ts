@@ -47,16 +47,25 @@ export type {
 // -----------------------------------------------------------------------------
 
 /**
- * Phase machine — DP1 collapse.
+ * Phase machine — DP1 collapse + C-1 Plan-Then-Build (Replit-style explicit
+ * commit, Pattern B).
  *
  * Before DP1 the enum had 7 states tracking a one-shot generative pipeline
  * (discovery → materializing → sculpting → focused → build → generating →
  * complete). The dynamic-pathway pivot removed the "Build then stream step
- * bodies" moment — learning is now continuous. The canvas has one primary
- * learning state that replaces sculpting + build + generating + complete.
+ * bodies" moment — learning is now continuous.
+ *
+ * C-1 reintroduces a single pre-commit pause as `planning`: the canvas
+ * shows the architecture diagram, project header, and heading-only step
+ * list while the student decides whether to commit. Tapping the explicit
+ * "Start building →" CTA flips phase to `materializing`/`learning` and the
+ * existing reveal cascade plus modular Phase B kicks in.
+ *
+ * Progression: discovery → planning → materializing → learning → focused.
  */
 export type Phase =
   | 'discovery'
+  | 'planning'
   | 'materializing'
   | 'learning'
   | 'focused'

@@ -662,7 +662,13 @@ export function App() {
       runAbortRef.current = controller
       const { signal } = controller
 
-      setPhase('materializing')
+      // C-1 Plan-Then-Build (Pattern B, Replit-style): submit lands the
+      // student in the explicit `planning` phase. The skeleton call still
+      // fires in the background, but the canvas renders heading-only step
+      // rows and a "Start building →" CTA — no automatic transition into
+      // the learning surface. Tapping the CTA is the deliberate commit
+      // moment that flips phase to `learning` (see handleStartBuilding).
+      setPhase('planning')
 
       // Fire research prefetch in parallel with the skeleton call. Non-blocking
       // by design — materialize-first is sacred (see feedback_materialization_first.md).
@@ -747,14 +753,12 @@ export function App() {
         applyAiPersonalPills(aiPatch)
       }
 
-      // DP1: advance to the single 'learning' state. The old model gated
-      // this behind a Build tap → step body streaming. In the dynamic
-      // pathway model, learning begins immediately after materialization.
-      // Wrapped in startTransition per rerender-transitions so the skeleton
-      // morph doesn't block input.
-      startTransition(() => {
-        setPhase('learning')
-      })
+      // C-1 Plan-Then-Build (Pattern B): the auto-advance to 'learning'
+      // is gone. Skeleton arrival lands the student in the planning view
+      // (already set above) with full ProjectHeader + ArchitectureDiagram
+      // + heading-only step list. The transition into 'learning' is
+      // explicit — handleStartBuilding fires it when the student taps
+      // the "Start building →" CTA.
 
       // DP1.5.F + DP1.7.D — Phase R + Phase B wiring.
       //

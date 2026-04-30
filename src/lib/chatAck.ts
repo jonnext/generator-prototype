@@ -47,6 +47,9 @@ export function buildChatAckPrompt(
   // Phase-specific copy rules. Post-DP1 the canvas always regenerates LIVE
   // when chat lands, so the ack consistently reads as "updating the outline".
   //
+  // - planning  → C-1 Pattern B pre-commit pause. Heading-only outline is on
+  //   screen, student has not yet tapped "Start building →". Refinement
+  //   reshapes the outline they're staring at, not in-flight learning content.
   // - learning  → primary state. Outline regenerates live with the request.
   // - focused   → student is inside Highway on one step; chat is step-scoped.
   // - discovery / materializing → should not reach this path, but we include
@@ -54,6 +57,8 @@ export function buildChatAckPrompt(
   const phaseRules: Record<Phase, string> = {
     discovery:
       '- Canvas state: starting fresh. Acknowledge the request and mention the outline is coming together now.',
+    planning:
+      '- Canvas state: the outline is on screen as a heading-only plan and the student is reviewing it before tapping "Start building". Acknowledge the specific change and mention the plan is being reshaped before they commit.',
     materializing:
       '- Canvas state: the outline is materializing for the first time. Acknowledge the request and mention it will be reflected in the outline that is landing now.',
     learning:

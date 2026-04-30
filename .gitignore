@@ -9,4 +9,5 @@ dist-ssr
 .env.local
 .vercel
 experiments/managed-agents/*/logs/
+experiments/managed-agents/*/outputs/
 experiments/managed-agents/*/node_modules/

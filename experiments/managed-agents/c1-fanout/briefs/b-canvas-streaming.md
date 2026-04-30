@@ -4,9 +4,32 @@ You are implementing **one of two parallel design directions** for the C-1 Plan-
 
 ## Your repo
 
-The prototype lives at `/Users/jonneylon/Dev/Nextwork/generator-prototype-v2/` (mounted into your container working directory). It's a Vite + React + TypeScript + Motion + Tailwind app.
+The prototype is hosted at `https://github.com/jonnext/generator-prototype.git`. It's a Vite + React + TypeScript + Motion + Tailwind app.
 
-**Your branch:** `experiment/c1-canvas-streaming` — create from `v2-outline-experiment` (this is the active prototype branch; `master` is the older default branch). Only push to your experiment branch. Do not touch `v2-outline-experiment` or `master`.
+**Workflow inside your container** (you have a fresh Linux env, Node, npm, and git available):
+
+```bash
+# 1. Clone (public read access — no auth needed)
+git clone https://github.com/jonnext/generator-prototype.git /workspace/repo
+cd /workspace/repo
+
+# 2. Switch to the active prototype branch (NOT master — master is older)
+git checkout v2-outline-experiment
+git pull
+
+# 3. Install deps so typecheck works
+npm install
+
+# 4. Make your code changes (in the working tree — DO NOT create a branch, DO NOT commit)
+# 5. Verify your changes typecheck cleanly
+npm run typecheck
+
+# 6. Capture your changes as a diff. This is your deliverable.
+git diff > /tmp/changes.diff
+cat /tmp/changes.diff
+```
+
+**You do NOT push anything.** No git push, no branch creation, no commits. Your only deliverable is the contents of `git diff`, which the orchestrator captures from your final messages.
 
 ## Strategic context (read first)
 
@@ -54,8 +77,8 @@ Use the Paper MCP `get_jsx` tool on those node IDs to read the artboard structur
 
 ## When you're done
 
-1. Stage your changes, commit with message `experiment(c1): ChatGPT-Canvas-style inline streaming preview`
-2. Push to `origin experiment/c1-canvas-streaming`
+1. Make sure `npm run typecheck` passes
+2. Run `git diff > /tmp/changes.diff && cat /tmp/changes.diff` and let the diff stream into your final agent message
 3. Print a short summary: which files changed, line counts, typecheck result, key design decisions you made
 4. Emit `session.status_idle`
 
@@ -64,6 +87,6 @@ Use the Paper MCP `get_jsx` tool on those node IDs to read the artboard structur
 - The architecture diagram remains the centerpiece while previewing.
 - Type-safety must hold.
 - No edits outside the listed files.
-- Your branch must not touch `v2-outline-experiment` or `master`.
 - The `Phase` type in `state.ts` is unchanged — that's the discriminator between this variant and Session A's.
+- Do not commit, do not push, do not create branches. Your deliverable is the `git diff`.
 - If you're stuck or need to deviate from the brief in a substantive way, document why in your final summary — don't silently ship a different design.

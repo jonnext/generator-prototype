@@ -29,23 +29,23 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-// Per-session configuration. Each session has its own brief + target branch.
+// Per-session configuration. Each session has its own brief + transcript.
 // The two directions test genuinely different bets about the user's mental
 // model of "the plan" — Replit's explicit gate vs Canvas's inline preview.
 const SESSIONS = [
   {
     label: 'A',
     title: 'C-1 Replit-style toggle',
-    branch: 'experiment/c1-replit-toggle',
     briefPath: join(__dirname, 'briefs/a-replit-toggle.md'),
     logPath: join(__dirname, 'logs/a-replit-toggle.jsonl'),
+    transcriptPath: join(__dirname, 'outputs/a-replit-toggle.transcript.md'),
   },
   {
     label: 'B',
     title: 'C-1 ChatGPT-Canvas streaming',
-    branch: 'experiment/c1-canvas-streaming',
     briefPath: join(__dirname, 'briefs/b-canvas-streaming.md'),
     logPath: join(__dirname, 'logs/b-canvas-streaming.jsonl'),
+    transcriptPath: join(__dirname, 'outputs/b-canvas-streaming.transcript.md'),
   },
 ] as const
 
@@ -59,6 +59,7 @@ async function main() {
   console.log('[orchestrator] starting C-1 fan-out — 2 sessions in parallel\n')
 
   await mkdir(join(__dirname, 'logs'), { recursive: true })
+  await mkdir(join(__dirname, 'outputs'), { recursive: true })
 
   // Step 1: Create the agent once. Both sessions reference it.
   // The system prompt is intentionally generic — the per-session brief carries
@@ -72,24 +73,27 @@ async function main() {
       'variant for the NextWork generator prototype.',
       '',
       'You will receive a design brief as your first user message. Read it',
-      'carefully. Read any Paper artboards it references via the paper MCP',
-      'connector (read-only). Implement on the branch the brief names.',
+      'carefully — it tells you exactly how to clone, what to change, and how',
+      'to deliver your work as a diff (NOT as a pushed branch).',
       '',
-      'Workflow:',
-      '  1. cd into the prototype repo at /workspace/generator-prototype-v2',
-      '  2. git fetch && git checkout v2-outline-experiment && git pull && git checkout -b <branch>',
-      '  3. Make the changes the brief describes — only in files it lists',
-      '  4. npm install (if needed) and npm run typecheck',
-      '  5. If typecheck passes: git add, commit, push the branch',
-      '  6. Print a summary and exit',
+      'Workflow at a glance (full details in the brief):',
+      '  1. git clone the repo into the container',
+      '  2. checkout v2-outline-experiment (the active prototype branch)',
+      '  3. npm install',
+      '  4. Make changes — only in files the brief lists',
+      '  5. npm run typecheck (must pass — fix source errors, never @ts-ignore)',
+      '  6. git diff > /tmp/changes.diff && cat /tmp/changes.diff (your deliverable)',
+      '  7. Print a summary and exit',
       '',
       'Hard rules:',
-      '  - Never push to v2-outline-experiment or master',
+      '  - Do NOT commit, push, or create branches. Your deliverable is the diff.',
       '  - Never edit files outside the brief\'s allowlist',
       '  - Never suppress type errors with @ts-ignore or as any',
       '  - Architecture diagram remains the centerpiece (universal positive)',
       '',
-      'If you get stuck or need to deviate, document why in your final summary.',
+      'If you get stuck or need to deviate, document why in your final summary',
+      'and still produce a partial diff. The orchestrator captures everything',
+      'you print, so be deliberate about what goes in your final messages.',
     ].join('\n'),
     tools: [{ type: 'agent_toolset_20260401' }],
   })
@@ -122,36 +126,42 @@ async function main() {
 
   for (const r of results) {
     console.log(`  Session ${r.label}: ${r.outcome}`)
-    console.log(`    branch:       ${r.branch}`)
     console.log(`    session id:   ${r.sessionId}`)
     console.log(`    elapsed:      ${(r.elapsedMs / 1000).toFixed(1)}s`)
     console.log(`    events seen:  ${r.eventCount}`)
-    console.log(`    log:          ${r.logPath}`)
+    console.log(`    transcript:   ${r.transcriptPath}`)
+    console.log(`    raw log:      ${r.logPath}`)
     if (r.warning) console.log(`    ⚠  ${r.warning}`)
     console.log()
   }
 
   console.log('[orchestrator] next step:')
-  console.log('  git fetch && git checkout experiment/c1-replit-toggle && npm run dev')
-  console.log('  (then repeat for experiment/c1-canvas-streaming)')
+  console.log('  Each transcript ends with a `git diff` patch.')
+  console.log('  Extract the diff section, save as session-a.diff / session-b.diff,')
+  console.log('  then in the prototype repo:')
+  console.log('    git checkout v2-outline-experiment')
+  console.log('    git checkout -b experiment/c1-replit-toggle')
+  console.log('    git apply path/to/session-a.diff')
+  console.log('    npm run typecheck && npm run dev')
+  console.log('  Repeat for session-b.diff on its own branch.')
 }
 
 interface SessionConfig {
   label: string
   title: string
-  branch: string
   briefPath: string
   logPath: string
+  transcriptPath: string
 }
 
 interface SessionResult {
   label: string
-  branch: string
   sessionId: string
   outcome: 'idle' | 'timeout' | 'error'
   elapsedMs: number
   eventCount: number
   logPath: string
+  transcriptPath: string
   warning?: string
 }
 
@@ -176,6 +186,15 @@ async function runSession(
   let eventCount = 0
   let outcome: SessionResult['outcome'] = 'error'
   let warning: string | undefined
+  // Accumulate all agent text + tool-call markers into one transcript file.
+  // The agent's final messages will include the full `git diff` output, which
+  // is the deliverable for this experiment.
+  const transcript: string[] = [
+    `# Transcript — Session ${cfg.label} (${cfg.title})`,
+    `_session id: ${session.id}_`,
+    `_started: ${new Date(startedAt).toISOString()}_`,
+    '',
+  ]
 
   const stream = await client.beta.sessions.events.stream(session.id)
 
@@ -199,6 +218,8 @@ async function runSession(
       await appendLog(cfg.logPath, event)
 
       // Surface high-signal events to stdout so you can watch progress.
+      // Also accumulate into the transcript file — that's where the diff
+      // ultimately lands.
       if (event.type === 'agent.message') {
         const text = (event.content ?? [])
           .filter((b: { type: string }) => b.type === 'text')
@@ -206,10 +227,12 @@ async function runSession(
           .join('')
         if (text.trim()) {
           process.stdout.write(`[session ${cfg.label}] ${text}\n`)
+          transcript.push(text)
         }
       } else if (event.type === 'agent.tool_use') {
         const toolName = (event as { name?: string }).name ?? 'unknown'
         process.stdout.write(`[session ${cfg.label}] [tool: ${toolName}]\n`)
+        transcript.push(`\n_[tool call: ${toolName}]_\n`)
       } else if (event.type === 'session.status_idle') {
         outcome = 'idle'
         console.log(`[session ${cfg.label}] ✓ status_idle reached`)
@@ -231,14 +254,19 @@ async function runSession(
     console.error(`[session ${cfg.label}] error:`, err)
   }
 
+  // Always write the transcript, even on error or timeout — it captures
+  // whatever the agent did manage to produce.
+  transcript.push('', `_finished: ${new Date().toISOString()}_`, `_outcome: ${outcome}_`)
+  await writeFile(cfg.transcriptPath, transcript.join('\n'), 'utf8')
+
   return {
     label: cfg.label,
-    branch: cfg.branch,
     sessionId: session.id,
     outcome,
     elapsedMs: Date.now() - startedAt,
     eventCount,
     logPath: cfg.logPath,
+    transcriptPath: cfg.transcriptPath,
     warning,
   }
 }

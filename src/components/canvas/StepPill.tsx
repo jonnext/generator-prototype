@@ -145,6 +145,12 @@ function StepPillImpl({
                 I don’t know, you tell me
               </button>
             </div>
+            {/* Cost-of-cycling indicator — communicates that pill changes
+                trigger a scoped re-shape (per-step), not a full re-generation.
+                Honest framing of the existing triggerSculpt behaviour. */}
+            <p className="font-body text-[11px] italic text-brand-400">
+              Changing re-shapes this step.
+            </p>
             {/* DP1.8.A.2 — "Talk it through →" escape hatch. Tertiary
                 affordance below the option row that pre-seeds the chat tray
                 with this decision's context. Suppressed when the parent
@@ -171,6 +177,7 @@ function StepPillImpl({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={stepExpand}
+            title="Click to re-shape this step"
             className="group flex w-full flex-col gap-1 rounded-xl border border-brand-50 bg-warm-white px-3 py-2 text-left hover:border-brand-200"
           >
             <span className="font-body flex items-center gap-2 text-xs text-brand-400">

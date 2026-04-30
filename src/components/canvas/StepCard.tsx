@@ -271,7 +271,7 @@ function StepCardImpl({
             onClick={handleTriggerStep}
             className="inline-flex shrink-0 items-center gap-1 type-label-s text-brand-400 hover:text-leather transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-200 rounded-sm"
           >
-            <span>Generate this step</span>
+            <span>Show this step</span>
             <span aria-hidden>↘</span>
           </button>
         ) : null}
@@ -300,114 +300,191 @@ function StepCardImpl({
         ) : null}
       </div>
 
-      {/* DP1.5.G — block body. Always visible below the heading once Phase
-          B has populated step.blocks. Shimmer stands in until then so the
-          card height is stable during research + generation. The block
-          layer sits BETWEEN the heading (click target) and the pill rows
-          (expanded-only) — students read the step's actual content without
-          needing to expand.
-          DP1.5.H — shimmer → blocks crossfade via AnimatePresence. `mode`
-          is omitted so the exiting shimmer and entering blocks briefly
-          overlap; the container's natural min-height prevents height jump.
-          DP1.7.G — render switches on generationStatus:
-            • 'pending'    → render nothing (heading-only deferred treatment).
-            • 'generating' → BlockShimmer.
-            • 'ready'      → BlockList.
-            • undefined    → legacy fallback (shimmer until blocks populate). */}
-      {isPending ? null : (
-        <div className="pl-8 md:pl-9">
-          <AnimatePresence initial={false}>
-            {step.generationStatus === 'generating' || (step.generationStatus === undefined && step.blocks === undefined) ? (
-              <motion.div
-                key="shimmer"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                <BlockShimmer />
-              </motion.div>
-            ) : step.blocks && step.blocks.length > 0 ? (
-              <motion.div
-                key="blocks"
-                initial={{ opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-              >
-                <BlockList
-                  blocks={step.blocks}
-                  onAllBlocksComplete={handleAllBlocksComplete}
-                />
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
-        </div>
-      )}
+      {/* DP1.5.G — block body.
+          C-2 step 3 — gated behind isExpanded for READY content. The
+          shimmer (generating state) still renders unconditionally so the
+          labour-illusion during cascade is preserved: students see steps
+          2–5 actively generating even while step 1 is the only expanded
+          card. Once a step transitions to 'ready' and the student hasn't
+          drilled in, the body folds away — chips below the heading carry
+          the per-step summary. Walks back DP1.5's "always visible" rule
+          intentionally because chips now fill the job DP1.5 was
+          protecting (non-empty summary state).
+          DP1.7.G — pending steps render nothing here (heading-only). */}
+      {(() => {
+        if (isPending) return null
+        const isShimmering =
+          step.generationStatus === 'generating' ||
+          (step.generationStatus === undefined && step.blocks === undefined)
+        const hasReadyBlocks = step.blocks && step.blocks.length > 0
+        const showReadyBlocks = isExpanded && hasReadyBlocks
+        if (!isShimmering && !showReadyBlocks) return null
+        return (
+          <div className="pl-8 md:pl-9">
+            <AnimatePresence initial={false}>
+              {isShimmering ? (
+                <motion.div
+                  key="shimmer"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <BlockShimmer />
+                </motion.div>
+              ) : showReadyBlocks ? (
+                <motion.div
+                  key="blocks"
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                >
+                  <BlockList
+                    blocks={step.blocks ?? []}
+                    onAllBlocksComplete={handleAllBlocksComplete}
+                  />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </div>
+        )
+      })()}
 
-      {/* DP1.5 post-review — pill rows render ALWAYS below the block body.
-          In DP1 pills were the primary shaping surface and lived behind a
-          click-to-expand toggle. Now that blocks are inline (DP1.5.G), the
-          student's mental model is "I can see everything" — hiding pills
-          behind hover feels broken. The expand/collapse machinery is kept
-          (isExpanded + onExpand/onCollapse) for future drill-in behavior
-          but no longer gates pill visibility.
-          Padding matches the block layer's pl-8 md:pl-9 so pills align
-          with content under the heading text, not the step number.
-          DP1.7.G — pending steps suppress pills along with the block body
-          so the deferred treatment is heading-only. */}
+      {/* C-2 step 2 — Built for Mars "Hide-the-Advanced" pattern applied
+          to per-step decision controls.
+          The DP1.5 post-review specifically un-hid the BLOCK BODY because
+          inline content makes the "everything visible" mental model right.
+          That decision is preserved above (the BlockList renders regardless
+          of isExpanded). What changes here is pill machinery only:
+          - Collapsed (default): a thin row of summary chips shows what's
+            currently picked for each decision (e.g. "TypeScript · Workers
+            · Bearer"). The chips are read-only display; clicking the
+            heading expands the step.
+          - Expanded: the full StepPill rows + ResearchCard render exactly
+            as before. Cycling, randomize, "Talk it through" all live here.
+          Net effect: 5 steps × N pills each → 5 short chip lines instead
+          of 5 stacks of "Pick one:" question rows. Density drops without
+          walking back DP1.5's "blocks are inline" decision.
+          DP1.7.G — pending steps suppress chips along with the block body
+          so the deferred treatment stays heading-only. */}
       {!isPending && step.pills.length > 0 ? (
-        <div className="flex flex-col gap-3 pl-8 md:pl-9">
-          {step.pills.map((pill) => {
-            const definition = pillDefinitions[pill.decisionType]
-            const question = definition?.question ?? 'Pick one:'
-            const isOpen = reopenedDecision === pill.decisionType
-            return (
-              <div
-                key={pill.decisionType}
-                className="flex w-full flex-col gap-2"
-              >
-                <StepPill
-                  row={pill}
-                  question={question}
-                  options={pillOptionsByDecision[pill.decisionType] ?? []}
-                  onPick={handlePick}
-                  onRandomize={handleRandomize}
-                  onReopen={handleReopen}
-                  isOpen={isOpen}
-                  rationale={definition?.rationale}
-                  onAskAboutPill={
-                    onAskAboutPill ? handleAskAboutPill : undefined
-                  }
-                />
-                {/* ResearchCard stays behind the expand gate — it's the
-                    detailed reasoning view, more verbose than the pill
-                    chip itself. Keep it opt-in via expansion. */}
-                <AnimatePresence initial={false}>
-                  {isExpanded ? (
-                    <motion.div
-                      key="research-card"
-                      variants={stepExpandVariants}
-                      initial="collapsed"
-                      animate="expanded"
-                      exit="collapsed"
-                      transition={stepExpand}
-                      className="overflow-hidden"
-                    >
-                      <ResearchCard
-                        decisionType={pill.decisionType}
-                        currentSelection={pill.selected}
-                      />
-                    </motion.div>
-                  ) : null}
-                </AnimatePresence>
-              </div>
-            )
-          })}
+        <div className="pl-8 md:pl-9">
+          {isExpanded ? (
+            <div className="flex flex-col gap-3">
+              {step.pills.map((pill) => {
+                const definition = pillDefinitions[pill.decisionType]
+                const question = definition?.question ?? 'Pick one:'
+                const isOpen = reopenedDecision === pill.decisionType
+                return (
+                  <div
+                    key={pill.decisionType}
+                    className="flex w-full flex-col gap-2"
+                  >
+                    <StepPill
+                      row={pill}
+                      question={question}
+                      options={pillOptionsByDecision[pill.decisionType] ?? []}
+                      onPick={handlePick}
+                      onRandomize={handleRandomize}
+                      onReopen={handleReopen}
+                      isOpen={isOpen}
+                      rationale={definition?.rationale}
+                      onAskAboutPill={
+                        onAskAboutPill ? handleAskAboutPill : undefined
+                      }
+                    />
+                    {/* ResearchCard stays behind the expand gate — it's the
+                        detailed reasoning view, more verbose than the pill
+                        chip itself. Keep it opt-in via expansion. */}
+                    <AnimatePresence initial={false}>
+                      <motion.div
+                        key="research-card"
+                        variants={stepExpandVariants}
+                        initial="collapsed"
+                        animate="expanded"
+                        exit="collapsed"
+                        transition={stepExpand}
+                        className="overflow-hidden"
+                      >
+                        <ResearchCard
+                          decisionType={pill.decisionType}
+                          currentSelection={pill.selected}
+                        />
+                      </motion.div>
+                    </AnimatePresence>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <SummaryChipRow pills={step.pills} />
+          )}
         </div>
       ) : null}
     </motion.article>
   )
 }
+
+// ----------------------------------------------------------------------------
+// SummaryChipRow — read-only display of pill selections for collapsed cards.
+// ----------------------------------------------------------------------------
+//
+// One chip per pill row. Picked values render as a solid capsule; null
+// selections render as a dashed "Not picked" placeholder so the student can
+// see at a glance which decisions are outstanding. The whole row is
+// non-interactive — clicking the heading is the way to drill in. This keeps
+// the keyboard tab order at exactly one stop per step (the heading button)
+// and lets the chips function purely as a summary.
+
+interface SummaryChipRowProps {
+  pills: { decisionType: string; selected: string | null }[]
+}
+
+function SummaryChipRowImpl({ pills }: SummaryChipRowProps) {
+  return (
+    <div
+      role="list"
+      aria-label="Step decisions"
+      className="flex flex-wrap items-center gap-1.5"
+    >
+      {pills.map((pill) => (
+        <SummaryChip
+          key={pill.decisionType}
+          label={pill.selected}
+        />
+      ))}
+    </div>
+  )
+}
+
+const SummaryChipRow = memo(SummaryChipRowImpl)
+
+interface SummaryChipProps {
+  label: string | null
+}
+
+function SummaryChipImpl({ label }: SummaryChipProps) {
+  if (!label) {
+    return (
+      <span
+        role="listitem"
+        className="inline-flex h-6 items-center rounded-full border border-dashed border-brand-200 bg-warm-white/60 px-2.5 text-[11px] italic text-brand-400"
+      >
+        Not picked
+      </span>
+    )
+  }
+  return (
+    <span
+      role="listitem"
+      className="inline-flex h-6 items-center rounded-full border border-brand-50 bg-warm-white px-2.5 text-[11px] text-leather"
+    >
+      {label}
+    </span>
+  )
+}
+
+const SummaryChip = memo(SummaryChipImpl)
 
 export const StepCard = memo(StepCardImpl)

@@ -107,8 +107,14 @@ export function DiscoveryScreen({ onSearchCardSubmit }: DiscoveryScreenProps) {
 
       {/* Hero zone — paper ground, hero + example pills.
           Top padding (132px) and inter-element gap (32px) ported verbatim
-          from Paper artboard 4LA-0 so the hero sits where Jon designed it. */}
-      <div className="flex w-full flex-col items-center pt-[132px]">
+          from Paper artboard 4LA-0. min-h-[96vh] keeps the hero as the
+          sole above-the-fold content; the browse panel and all rows live
+          entirely below the fold for the cleanest possible first
+          impression. The thin sliver of the dark panel's curved top
+          (rounded-tl-[112px] rounded-tr-[80px]) just peeking past the
+          fold acts as a "scroll for more" signal without competing for
+          attention. */}
+      <div className="flex min-h-[96vh] w-full flex-col items-center justify-center">
         <div className="flex w-full max-w-[1100px] flex-col items-center gap-8 px-10">
           <HeroHeadline />
           <ExamplePromptPills onPick={handlePickPrompt} />

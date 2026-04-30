@@ -9,8 +9,8 @@
 // Per rendering-conditional-render we use ternaries for the active state.
 // Motion's `layout` prop handles FLIP when pill labels change width.
 
-import { motion } from 'motion/react'
-import { memo, useCallback, type ReactElement } from 'react'
+import { motion, AnimatePresence } from 'motion/react'
+import { memo, useCallback, useMemo, useState, type ReactElement } from 'react'
 import { metadataPillVariants } from '@/motion/choreography'
 import { layoutShift } from '@/motion/springs'
 import type {
@@ -60,6 +60,18 @@ export interface MetadataRowProps {
 }
 
 function MetadataRowImpl({ personal, origins, onChange }: MetadataRowProps) {
+  // C-2 step 1 — Built for Mars "Hide-the-Advanced" pattern. The row defaults
+  // to a single summary pill ("Defaults: 30 min · Build · Free tier ▾") that
+  // expands to the 3-pill controls on click. The chevron itself teaches that
+  // depth exists, while the summary line answers Roy's "summary first" ask
+  // without sacrificing the per-pill cycle interaction once expanded.
+  //
+  // Once expanded, the row stays expanded for the life of the canvas mount —
+  // we don't auto-collapse on outside click because cycling pills is a
+  // fire-and-forget interaction; collapsing under the user's cursor would
+  // feel jumpy. A small ▴ button gives an explicit collapse path.
+  const [expanded, setExpanded] = useState(false)
+
   const handleDuration = useCallback(
     (next: DurationId) => onChange('duration', next),
     [onChange],
@@ -73,33 +85,118 @@ function MetadataRowImpl({ personal, origins, onChange }: MetadataRowProps) {
     [onChange],
   )
 
+  const handleExpand = useCallback(() => setExpanded(true), [])
+  const handleCollapse = useCallback(() => setExpanded(false), [])
+
+  // Discoverability caption shows only while every pill is still a silent
+  // default. Once any pill flips to 'ai-picked' or 'user-confirmed', the row
+  // has communicated its own state and the caption is redundant.
+  const allDefaults =
+    origins.duration === 'default' &&
+    origins.mode === 'default' &&
+    origins.budget === 'default'
+
+  // Summary line shown on the collapsed pill: e.g. "30 min · Build · Free tier".
+  // Falls back to em-dash if an option is somehow unmatched (defensive — the
+  // option tables are exhaustive against the ID unions today).
+  const summaryLabel = useMemo(() => {
+    const dur = durationOptions.find((o) => o.id === personal.duration)?.label ?? '—'
+    const mod = modeOptions.find((o) => o.id === personal.mode)?.label ?? '—'
+    const bud = budgetOptions.find((o) => o.id === personal.budget)?.label ?? '—'
+    return `${dur} · ${mod} · ${bud}`
+  }, [personal.duration, personal.mode, personal.budget])
+
   return (
-    <div
-      role="group"
-      aria-label="Project parameters"
-      className="flex w-full flex-wrap items-center gap-2"
-    >
-      <MetaPill<DurationId>
-        name="Duration"
-        options={durationOptions}
-        value={personal.duration}
-        origin={origins.duration}
-        onSelect={handleDuration}
-      />
-      <MetaPill<ModeId>
-        name="Mode"
-        options={modeOptions}
-        value={personal.mode}
-        origin={origins.mode}
-        onSelect={handleMode}
-      />
-      <MetaPill<BudgetId>
-        name="Budget"
-        options={budgetOptions}
-        value={personal.budget}
-        origin={origins.budget}
-        onSelect={handleBudget}
-      />
+    <div className="flex w-full flex-col gap-1.5">
+      <AnimatePresence initial={false}>
+        {allDefaults ? (
+          <motion.span
+            key="defaults-hint"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="font-body text-[11px] italic text-brand-400"
+            aria-hidden
+          >
+            Defaults — tap to shape.
+          </motion.span>
+        ) : null}
+      </AnimatePresence>
+      <AnimatePresence initial={false} mode="wait">
+        {expanded ? (
+          <motion.div
+            key="expanded"
+            role="group"
+            aria-label="Project parameters"
+            initial={{ opacity: 0, y: -2 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -2 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className="flex w-full flex-wrap items-center gap-2"
+          >
+            <MetaPill<DurationId>
+              name="Duration"
+              options={durationOptions}
+              value={personal.duration}
+              origin={origins.duration}
+              onSelect={handleDuration}
+            />
+            <MetaPill<ModeId>
+              name="Mode"
+              options={modeOptions}
+              value={personal.mode}
+              origin={origins.mode}
+              onSelect={handleMode}
+            />
+            <MetaPill<BudgetId>
+              name="Budget"
+              options={budgetOptions}
+              value={personal.budget}
+              origin={origins.budget}
+              onSelect={handleBudget}
+            />
+            <button
+              type="button"
+              onClick={handleCollapse}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-brand-50 bg-warm-white text-brand-400 hover:text-leather hover:border-brand-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200"
+              aria-label="Collapse defaults"
+            >
+              <span aria-hidden>▴</span>
+            </button>
+          </motion.div>
+        ) : (
+          <motion.button
+            key="collapsed"
+            type="button"
+            onClick={handleExpand}
+            initial={{ opacity: 0, y: -2 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -2 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className={
+              allDefaults
+                ? 'inline-flex h-9 w-fit items-center gap-2 rounded-full border border-dashed border-brand-200 bg-warm-white/60 px-4 italic hover:border-brand-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200'
+                : 'inline-flex h-9 w-fit items-center gap-2 rounded-full border border-brand-50 bg-warm-white px-4 hover:border-brand-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200'
+            }
+            aria-label={`Project defaults: ${summaryLabel}. Tap to shape.`}
+            aria-expanded={false}
+          >
+            <span className="type-label-s text-brand-400">Defaults</span>
+            <span
+              className={
+                allDefaults
+                  ? 'font-heading text-sm text-brand-400'
+                  : 'font-heading text-sm text-leather'
+              }
+            >
+              {summaryLabel}
+            </span>
+            <span aria-hidden className="text-[11px] text-brand-400">
+              ▾
+            </span>
+          </motion.button>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

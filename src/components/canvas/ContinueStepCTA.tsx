@@ -50,10 +50,10 @@ function ContinueStepCTAImpl({
         type="button"
         onClick={handleClick}
         className="inline-flex max-w-full items-center gap-2 rounded-xl border border-brand-50 bg-paper px-4 py-2.5 font-body text-sm text-leather shadow-[var(--shadow-card)] hover:border-brand-300 hover:bg-warm-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-200"
-        aria-label={`Continue to step ${stepLabel}: ${nextStepHeading}`}
+        aria-label={`Ready for step ${stepLabel}: ${nextStepHeading}`}
       >
         <span className="truncate">
-          Continue to step {stepLabel}: {nextStepHeading}
+          Ready for step {stepLabel}: {nextStepHeading}
         </span>
         <span aria-hidden className="shrink-0">→</span>
       </button>
